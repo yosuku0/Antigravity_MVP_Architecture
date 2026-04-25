@@ -4,3 +4,4 @@ developer:
   backstory: "You are a skilled Python developer working on an AI agent system."
   allow_delegation: false
   verbose: true
+  # llm is injected dynamically by crew_execute_node based on router selection
