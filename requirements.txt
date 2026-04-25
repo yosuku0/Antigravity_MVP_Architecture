@@ -1,19 +1,22 @@
-Core orchestration
+# Core orchestration
 langgraph>=0.2.0
 langchain>=0.3.0
 
-LLM providers (OpenAI SDK pattern for NIM + paid providers)
+# LLM providers (OpenAI SDK pattern for NIM + paid providers)
 openai>=1.0.0
 python-dotenv>=1.0.0
 
-Local LLM (Ollama)
+# Local LLM (Ollama)
 ollama>=0.3.0
 
-Data / vector DB (Qdrant deferred to P1, but client is harmless)
+# Data / vector DB (Qdrant deferred to P1, but client is harmless)
 qdrant-client>=1.0.0
 
-Testing
+# Testing
 pytest>=8.0.0
 
-File watching (daemon)
+# File watching (daemon)
 watchdog>=4.0.0
+
+# YAML parsing
+PyYAML>=6.0
