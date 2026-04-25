@@ -24,6 +24,14 @@ SECRET_PATTERNS = [
     (r"gho_[a-zA-Z0-9]{36}", "GitHub OAuth token"),
     (r"xox[baprs]-[0-9a-zA-Z\-]+", "Slack token"),
     (r"\b[0-9a-f]{64}\b", "Hex secret (64 chars)"),
+    # Anthropic API key
+    (r"sk-ant-[a-zA-Z0-9\-_]{20,}", "Anthropic"),
+    # NVIDIA NIM API key
+    (r"nvapi-[a-zA-Z0-9\-_]{20,}", "NVIDIA NIM"),
+    # Google / Gemini API key
+    (r"AIza[0-9A-Za-z\-_]{35}", "Google/Gemini"),
+    # Moonshot / Kimi API key
+    (r"moonshot-[a-zA-Z0-9\-_]{20,}", "Moonshot"),
 ]
 
 # Scope-guard forbidden imports (with exceptions)
