@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,10 @@ class DomainMeta:
         )
 
 
+# Module-level lock for singleton thread-safety
+_lock = threading.Lock()
+
+
 class KnowledgeOS:
     """Domain-aware knowledge operating system.
 
@@ -82,12 +87,13 @@ class KnowledgeOS:
     VALID_DOMAINS = {"game", "market", "personal"}
     _instance: KnowledgeOS | None = None
 
-    def __new__(cls, root: Path | None = None):
+    def __new__(cls, *args, **kwargs):
         """Singleton — one KnowledgeOS per process."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
+        with _lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
 
     def __init__(self, root: Path | None = None):
         if self._initialized:
