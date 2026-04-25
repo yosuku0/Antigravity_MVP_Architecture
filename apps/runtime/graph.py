@@ -1,4 +1,5 @@
 import json
+import subprocess
 from typing import TypedDict, Optional
 from pathlib import Path
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ class State(TypedDict):
     routing_context: str # "classify_local" for MVP
     artifact_path: str   # Path to generated artifact
     audit_result: Optional[str] # "pass", "fail", or None
+    audit_errors: Optional[str]
     crew_result: Optional[str]
 
 def load_job_node(state: State) -> State:
@@ -117,21 +119,28 @@ def crew_execute_node(state: State) -> State:
     }
 
 def audit_node(state: State) -> State:
-    """Minimal audit check. Real integration in B-007."""
+    """Run audit.py on the artifact and set audit_result."""
     path_str = state.get("artifact_path", "")
-    if path_str:
-        path = Path(path_str)
-        if path.exists():
-            audit_result = "pass"
-        else:
-            audit_result = "fail"
-    else:
-        audit_result = "fail"
+    if not path_str:
+        return {**state, "audit_result": "fail", "audit_errors": "No artifact path"}
         
-    return {
-        **state,
-        "audit_result": audit_result
-    }
+    artifact_path = Path(path_str)
+    
+    # Call scripts/audit.py as subprocess
+    repo_root = Path(__file__).resolve().parents[2]
+    audit_script = repo_root / "scripts" / "audit.py"
+    result = subprocess.run(
+        [sys.executable, str(audit_script), str(artifact_path)],
+        capture_output=True,
+        text=True
+    )
+    
+    # Parse output
+    output = result.stdout.strip()
+    if output == "PASS":
+        return {**state, "audit_result": "pass"}
+    else:
+        return {**state, "audit_result": "fail", "audit_errors": result.stderr.strip()}
 
 # Graph definition
 workflow = StateGraph(State)
