@@ -52,6 +52,13 @@ def stage_promotion(job_path: Path, repo_root: Path = None) -> Path:
     atomic_write(job_path, content)
     
     print(f"Staged for promotion: {job_id} → {staging_dir}")
+    
+    # P1-002: Slack notification for Gate 3
+    slack_user = frontmatter.get("slack_user")
+    if slack_user:
+        from apps.ingress.slack_notifier import notify_gate
+        notify_gate(job_id, gate=3, slack_user=slack_user)
+        
     return staging_dir
 
 def promote_to_wiki(job_path: Path, approver: str = "higurashi", repo_root: Path = None) -> None:

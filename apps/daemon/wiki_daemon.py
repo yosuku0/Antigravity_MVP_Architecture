@@ -236,6 +236,13 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
             self.update_job_status(job_id, new_status)
             print(f"Job {job_id} finished: {new_status}")
             
+            # P1-002: Slack notification for Gate 2
+            if new_status == "audit_passed":
+                from apps.ingress.slack_notifier import notify_gate
+                slack_user = frontmatter.get("slack_user")
+                if slack_user:
+                    notify_gate(job_id, gate=2, slack_user=slack_user)
+            
         except Exception as e:
             print(f"Failed to execute job {job_id}: {e}")
             self.update_job_status(job_id, "failed", reason=str(e))
