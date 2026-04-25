@@ -10,6 +10,9 @@ if env_path.exists():
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
 
+class ProviderBudgetExhausted(Exception):
+    pass
+
 class LLMRouter:
     """Unified router for NIM, Ollama, and paid providers."""
     
@@ -19,6 +22,8 @@ class LLMRouter:
             raise EnvironmentError(
                 "NVIDIA_API_KEY not set. Copy .env.example to .env and fill in your key."
             )
+        self._switch_count = 0
+        self._max_switches = 2
     
     def get_llm(self, context: str):
         """Return a LangChain LLM instance for the given routing context."""
@@ -61,20 +66,32 @@ class LLMRouter:
                 base_url="http://localhost:11434",
             )
     
-    def chat(self, context: str, messages: list, max_retries: int = 2) -> str:
+    def chat(self, context: str, messages: list, max_retries: int = None) -> str:
         """Chat with automatic fallback on failure."""
+        if max_retries is None:
+            max_retries = self._max_switches
+        
+        if self._switch_count >= self._max_switches:
+            raise ProviderBudgetExhausted(
+                f"Provider switch budget exhausted ({self._max_switches} switches)"
+            )
+        
         llm = self.get_llm(context)
         try:
             res = llm.invoke(messages)
-            # Handle different return types (ChatOpenAI returns BaseMessage, Ollama returns str)
             if hasattr(res, "content"):
                 return res.content
             return str(res)
         except Exception as e:
-            if max_retries > 0 and not context.startswith("classify_local"):
-                print(f"[router] Fallback to Ollama due to error: {e}")
-                return self.chat("classify_local", messages, max_retries - 1)
-            raise
+            self._switch_count += 1
+            if self._switch_count >= self._max_switches:
+                raise ProviderBudgetExhausted(
+                    f"Provider switch budget exhausted after {self._switch_count} switches"
+                ) from e
+            
+            # Fallback to Ollama
+            print(f"[router] Fallback to Ollama (switch {self._switch_count}/{self._max_switches}) due to error: {e}")
+            return self.chat("classify_local", messages, max_retries - 1)
 
 if __name__ == "__main__":
     # Quick test
