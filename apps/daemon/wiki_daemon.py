@@ -2,7 +2,7 @@ import os
 import time
 import json
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
@@ -22,7 +22,7 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
         
     def log_event(self, event_type, job_id, details=None):
         event = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": event_type,
             "job_id": job_id,
             "pid": os.getpid()
@@ -56,7 +56,7 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             with os.fdopen(fd, 'w') as f:
-                f.write(f"{datetime.utcnow().isoformat()}Z\n{os.getpid()}\n")
+                f.write(f"{datetime.now(timezone.utc).isoformat()}\n{os.getpid()}\n")
         except FileExistsError:
             # Lock already exists, another process took it
             return
