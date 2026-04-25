@@ -111,7 +111,8 @@ def try_lock(job_id: str) -> bool:
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w") as f:
-            f.write(f"{os.getpid()}\n{time.time()}\n")
+            ts = time.strftime("%Y%m%d%H%M%S", time.localtime())
+            f.write(f"{ts}:{os.getpid()}")
         return True
     except OSError as e:
         if e.errno == errno.EEXIST:
@@ -128,32 +129,48 @@ def release_lock(job_id: str) -> None:
         pass
 
 
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process is alive."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def is_lock_stale(job_id: str) -> bool:
-    """Check if a lock is stale (>10 min old or PID dead)."""
     lock_path = LOCK_DIR / f"{job_id}.lock"
     if not lock_path.exists():
         return False
     try:
-        with open(lock_path, "r") as f:
-            lines = f.read().strip().split("\n")
-        if len(lines) >= 2:
-            pid = int(lines[0])
-            timestamp = float(lines[1])
-            age_min = (time.time() - timestamp) / 60
-            # Check PID liveness
-            try:
-                os.kill(pid, 0)
-                pid_alive = True
-            except OSError:
-                pid_alive = False
-            return age_min > STALE_MINUTES or not pid_alive
-    except (ValueError, OSError):
-        pass
-    return False
+        content = lock_path.read_text(encoding="utf-8").strip()
+        parts = content.split(":")
+        if len(parts) != 2:
+            return True
+        ts_str, pid_str = parts
+        lock_time = time.mktime(time.strptime(ts_str, "%Y%m%d%H%M%S"))
+        age_min = (time.time() - lock_time) / 60
+        pid = int(pid_str)
+        pid_alive = _is_pid_alive(pid)
+
+        # 生きているプロセスのロックは、年齢に関わらず絶対に奪わない
+        if pid_alive:
+            return False
+
+        # 死んでいるプロセスのロックのみ、stale 判定を行う
+        return age_min > STALE_MINUTES
+
+    except (ValueError, OSError, TypeError):
+        return True
 
 
 def reclaim_stale_lock(job_id: str) -> bool:
     """Remove a stale lock and acquire a new one."""
+    if not is_lock_stale(job_id):
+        return False
     lock_path = LOCK_DIR / f"{job_id}.lock"
     try:
         lock_path.unlink()
