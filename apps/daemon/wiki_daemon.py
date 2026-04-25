@@ -19,6 +19,7 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
         self.locks_dir = Path(locks_dir)
         self.logs_dir = Path(logs_dir)
         self.log_file = self.logs_dir / "daemon.jsonl"
+        self.daemon_state = {}
         
     def log_event(self, event_type, job_id, details=None):
         event = {
@@ -31,6 +32,60 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
             event.update(details)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
+
+    def rebuild_state(self):
+        """Rebuild ground truth state from filesystem."""
+        print("Rebuilding daemon state...")
+        self.daemon_state = {}
+        
+        # 1. Scan jobs
+        jobs_found = 0
+        for job_file in self.jobs_dir.glob("*.md"):
+            try:
+                frontmatter, _ = read_frontmatter(job_file)
+                job_id = job_file.stem
+                self.daemon_state[job_id] = {
+                    "status": frontmatter.get("status"),
+                    "job_path": str(job_file)
+                }
+                jobs_found += 1
+            except Exception as e:
+                print(f"Error reading job {job_file}: {e}")
+
+        # 2. Scan locks
+        locks_found = 0
+        for lock_file in self.locks_dir.glob("*.lock"):
+            job_id = lock_file.stem
+            if job_id not in self.daemon_state:
+                self.daemon_state[job_id] = {"status": "unknown"}
+            
+            try:
+                content = lock_file.read_text().splitlines()
+                if len(content) >= 2:
+                    self.daemon_state[job_id].update({
+                        "lock_path": str(lock_file),
+                        "claimed_at": content[0],
+                        "pid": int(content[1])
+                    })
+                locks_found += 1
+            except Exception as e:
+                print(f"Error reading lock {lock_file}: {e}")
+
+        # 3. Log event
+        self.log_event("state_rebuilt", "system", {
+            "jobs_found": jobs_found,
+            "locks_found": locks_found
+        })
+        
+        # 4. Update cache file
+        state_cache = self.logs_dir / "daemon_state.json"
+        try:
+            with open(state_cache, "w", encoding="utf-8") as f:
+                json.dump(self.daemon_state, f, indent=2)
+        except Exception as e:
+            print(f"Error writing state cache: {e}")
+            
+        print(f"State rebuilt: {jobs_found} jobs, {locks_found} locks found.")
 
     def on_created(self, event):
         self.process_job(Path(event.src_path))
@@ -62,6 +117,12 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
             return
 
         self.log_event("job_claimed", job_id, {"message": "Atomic lock acquired"})
+        self.daemon_state[job_id] = {
+            "status": "claimed",
+            "lock_path": str(lock_path),
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid()
+        }
         
         # Transition status to claimed
         frontmatter["status"] = "claimed"
@@ -82,10 +143,11 @@ def main():
     locks_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # TODO: B-002 State rebuild on startup
-    # TODO: B-003 Stale-lock reclaim (background thread)
-
+    # B-002: State rebuild on startup
     handler = WikiDaemonHandler(jobs_dir, locks_dir, logs_dir)
+    handler.rebuild_state()
+
+    # TODO: B-003 Stale-lock reclaim (background thread)
     observer = Observer()
     observer.schedule(handler, str(jobs_dir), recursive=False)
     observer.start()
