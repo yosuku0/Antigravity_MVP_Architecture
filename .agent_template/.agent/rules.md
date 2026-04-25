@@ -1,0 +1,1 @@
+# Agent-specific rules (defaults from global.md)

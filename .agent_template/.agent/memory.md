@@ -1,0 +1,1 @@
+# Agent-specific tactical memory (auto-populated)
