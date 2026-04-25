@@ -1,0 +1,14 @@
+security_audit:
+  description: |
+    Audit {artifact_path} for:
+    - Secret leakage (API keys, passwords)
+    - Injection vulnerabilities
+    - Unsafe imports
+  expected_output: "Security report: PASS or FAIL with findings"
+  agent: auditor
+
+quality_check:
+  description: |
+    Verify {artifact_path} fulfills: {objective}
+  expected_output: "Quality report: PASS or FAIL with gaps"
+  agent: quality

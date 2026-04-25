@@ -1,0 +1,13 @@
+auditor:
+  role: "Security Auditor"
+  goal: "Audit artifacts for security vulnerabilities and policy violations"
+  backstory: "You are a security-focused auditor."
+  allow_delegation: false
+  verbose: true
+
+quality:
+  role: "Quality Assurance"
+  goal: "Verify artifacts meet acceptance criteria"
+  backstory: "You ensure deliverables match requirements."
+  allow_delegation: false
+  verbose: true

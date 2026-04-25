@@ -1,0 +1,14 @@
+research_task:
+  description: |
+    Research the following topic and gather key facts with sources:
+    {objective}
+    
+    Save your findings to: {output_path}
+  expected_output: "Structured research notes with citations"
+  agent: researcher
+
+synthesize_task:
+  description: |
+    Synthesize the research notes at {artifact_path} into a concise summary.
+  expected_output: "Executive summary of findings"
+  agent: analyst

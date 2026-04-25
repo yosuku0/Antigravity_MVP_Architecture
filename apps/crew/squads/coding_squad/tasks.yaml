@@ -1,0 +1,17 @@
+implement_task:
+  description: |
+    Implement the following objective:
+    {objective}
+    
+    Write your code to: {output_path}
+  expected_output: "Working Python code with error handling"
+  agent: developer
+
+review_task:
+  description: |
+    Review the code at {artifact_path} for:
+    - Syntax correctness
+    - Security issues (no hardcoded secrets)
+    - Proper error handling
+  expected_output: "PASS or FAIL with specific issues listed"
+  agent: reviewer
