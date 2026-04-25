@@ -48,7 +48,7 @@ class UnifiedRouter:
 
     def __init__(self, log_path: str = "work/model_calls.jsonl") -> None:
         self.nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "")
-        self.ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        self.ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         self.log_path = Path(log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._switch_count = 0
@@ -77,12 +77,12 @@ class UnifiedRouter:
             return llm
 
         elif context == "classify_local":
-            llm = LLM(model='ollama/qwen2.5:7b', base_url=self.ollama_host)
+            llm = LLM(model='ollama/qwen2.5:7b', base_url=self.ollama_base_url)
             self._log_call("ollama", "qwen2.5:7b", context)
             return llm
 
         elif context == "code_local":
-            llm = LLM(model='ollama/qwen2.5-coder:7b', base_url=self.ollama_host)
+            llm = LLM(model='ollama/qwen2.5-coder:7b', base_url=self.ollama_base_url)
             self._log_call("ollama", "qwen2.5-coder:7b", context)
             return llm
 
