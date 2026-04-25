@@ -26,57 +26,30 @@ class LLMRouter:
         self._max_switches = 2
     
     def get_llm(self, context: str):
-        """Return a LangChain LLM instance for the given routing context."""
+        """Return a string prefix (for CrewAI) or LLM instance for the given routing context."""
         
+        # CrewAI 1.x / LiteLLM compatibility: Return string prefix for Agent.llm
         if context in ("nim_fast", "nim_cheap", "classify_remote"):
-            # NIM: meta/llama-3.1-8b-instruct (fast/cheap)
-            return ChatOpenAI(
-                openai_api_base="https://integrate.api.nvidia.com/v1",
-                openai_api_key=self.nvidia_api_key,
-                model_name="meta/llama-3.1-8b-instruct",
-                temperature=0.7,
-                max_tokens=512,
-            )
+            return "nvidia_nim/meta/llama-3.1-8b-instruct"
         
         elif context in ("nim_large", "nim_code", "review"):
-            # NIM: meta/llama-3.3-70b-instruct (large)
-            return ChatOpenAI(
-                openai_api_base="https://integrate.api.nvidia.com/v1",
-                openai_api_key=self.nvidia_api_key,
-                model_name="meta/llama-3.3-70b-instruct",
-                temperature=0.5,
-                max_tokens=1024,
-            )
+            return "nvidia_nim/meta/llama-3.3-70b-instruct"
         
         elif context == "classify_local":
-            # Ollama: qwen2.5:7b
-            return Ollama(
-                model="qwen2.5:7b",
-                base_url="http://localhost:11434",
-            )
+            return "ollama/qwen2.5:7b"
         
         elif context == "exploration":
-            # Kimi Open Platform (OpenAI-compatible)
+            # Kimi Open Platform (OpenAI-compatible via LiteLLM)
             kimi_key = os.environ.get("KIMI_API_KEY")
             if not kimi_key:
-                # Fallback to NIM if Kimi key not set
                 return self.get_llm("nim_fast")
-            return ChatOpenAI(
-                openai_api_base="https://api.moonshot.cn/v1",
-                openai_api_key=kimi_key,
-                model_name="moonshot-v1-8k",
-                temperature=0.7,
-            )
+            return "moonshot/moonshot-v1-8k"
         
         else:
-            # Default fallback: Ollama
-            return Ollama(
-                model="qwen2.5:7b",
-                base_url="http://localhost:11434",
-            )
+            return "ollama/qwen2.5:7b"
     
     def chat(self, context: str, messages: list, max_retries: int = None) -> str:
-        """Chat with automatic fallback on failure."""
+        """Chat using direct LangChain call with automatic fallback on failure."""
         if max_retries is None:
             max_retries = self._max_switches
         
@@ -85,8 +58,33 @@ class LLMRouter:
                 f"Provider switch budget exhausted ({self._max_switches} switches)"
             )
         
-        llm = self.get_llm(context)
+        # For direct chat() calls, we use the real objects
+        llm_type = self.get_llm(context)
+        
         try:
+            if llm_type.startswith("nvidia_nim/"):
+                model = llm_type.split("/", 1)[1]
+                llm = ChatOpenAI(
+                    openai_api_base="https://integrate.api.nvidia.com/v1",
+                    openai_api_key=self.nvidia_api_key,
+                    model_name=model,
+                    temperature=0.7,
+                    max_tokens=512,
+                )
+            elif llm_type.startswith("ollama/"):
+                model = llm_type.split("/", 1)[1]
+                llm = Ollama(model=model, base_url="http://localhost:11434")
+            elif llm_type.startswith("moonshot/"):
+                model = llm_type.split("/", 1)[1]
+                llm = ChatOpenAI(
+                    openai_api_base="https://api.moonshot.cn/v1",
+                    openai_api_key=os.environ.get("KIMI_API_KEY"),
+                    model_name=model,
+                    temperature=0.7,
+                )
+            else:
+                llm = Ollama(model="qwen2.5:7b", base_url="http://localhost:11434")
+                
             res = llm.invoke(messages)
             if hasattr(res, "content"):
                 return res.content
@@ -106,7 +104,7 @@ if __name__ == "__main__":
     # Quick test
     try:
         router = LLMRouter()
-        print("NIM LLM:", router.get_llm("nim_fast"))
-        print("Ollama LLM:", router.get_llm("classify_local"))
+        print("NIM LLM String:", router.get_llm("nim_fast"))
+        print("Ollama LLM String:", router.get_llm("classify_local"))
     except Exception as e:
         print(f"Error initializing router: {e}")

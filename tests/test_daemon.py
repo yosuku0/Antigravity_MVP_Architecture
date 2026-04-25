@@ -6,7 +6,7 @@ from apps.daemon.wiki_daemon import WikiDaemonHandler
 
 def test_daemon_claims_approved_job(tmp_repo, create_job, monkeypatch):
     # Mock graph app.invoke to avoid actual execution
-    monkeypatch.setattr("apps.runtime.graph.app.invoke", lambda state: {"status": "executed"})
+    monkeypatch.setattr("apps.runtime.graph.app.invoke", lambda state: {"audit_result": "pass"})
     
     # 1. Create an approved job
     job_path = create_job("JOB-001", "approved_gate_1")
@@ -25,7 +25,7 @@ def test_daemon_claims_approved_job(tmp_repo, create_job, monkeypatch):
     
     # 4. Assert status updated in job file
     content = job_path.read_text(encoding="utf-8")
-    assert "status: claimed" in content
+    assert "status: audit_passed" in content
 
 def test_daemon_rebuild_state(tmp_repo, create_job):
     # 1. Create a claimed job and a lock

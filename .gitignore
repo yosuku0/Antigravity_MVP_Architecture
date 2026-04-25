@@ -9,12 +9,15 @@ __pycache__/
 
 # Logs
 logs/
+runtime/
 *.log
 *.jsonl
 
 # Working artifacts
 work/artifacts/
+work/locks/
 memory/working/
+wiki/
 
 # OS
 .DS_Store

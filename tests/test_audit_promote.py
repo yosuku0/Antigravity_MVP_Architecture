@@ -24,9 +24,11 @@ def test_promotion_flow(tmp_repo, create_job, monkeypatch):
     job_id = "JOB-PROMOTE"
     job_path = create_job(job_id, "audit_passed", audit_result="pass", approved_gate_2_by="tester")
     
-    # Setup: Raw file
-    raw_file = tmp_repo / "raw" / "wiki_page.md"
-    raw_file.write_text("Wiki Content", encoding="utf-8")
+    # Setup: Artifact in working dir
+    working_dir = tmp_repo / "memory" / "working" / job_id
+    working_dir.mkdir(parents=True, exist_ok=True)
+    artifact_file = working_dir / "wiki_page.md"
+    artifact_file.write_text("Wiki Content", encoding="utf-8")
     
     # 1. Stage
     stage_promotion(job_path, repo_root=tmp_repo)

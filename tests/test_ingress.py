@@ -5,7 +5,7 @@ from apps.daemon.wiki_daemon import WikiDaemonHandler
 
 def test_ingress_picking_up_new_job(tmp_repo, create_job, monkeypatch):
     # Mock graph to avoid execution
-    monkeypatch.setattr("apps.runtime.graph.app.invoke", lambda state: {"status": "executed"})
+    monkeypatch.setattr("apps.runtime.graph.app.invoke", lambda state: {"audit_result": "pass"})
     
     handler = WikiDaemonHandler(
         jobs_dir=tmp_repo / "work" / "jobs",
@@ -19,6 +19,6 @@ def test_ingress_picking_up_new_job(tmp_repo, create_job, monkeypatch):
     # 2. Call handler (normally called by watchdog, but we call it directly for test)
     handler.process_job(job_path)
     
-    # 3. Assert claimed
+    # 3. Assert transitioned to audit_passed
     content = job_path.read_text(encoding="utf-8")
-    assert "status: claimed" in content
+    assert "status: audit_passed" in content

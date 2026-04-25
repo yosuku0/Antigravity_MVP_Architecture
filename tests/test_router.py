@@ -24,10 +24,12 @@ def test_router_budget_exhaustion(monkeypatch):
     router = LLMRouter()
     router._max_switches = 1 # Force exhaustion on first fallback
     
-    # Mock NIM to fail
-    mock_fail = MagicMock()
-    mock_fail.invoke.side_effect = Exception("NIM Fail")
-    monkeypatch.setattr(router, "get_llm", lambda ctx: mock_fail)
+    # Mock ChatOpenAI to fail
+    mock_chat_openai = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.invoke.side_effect = Exception("NIM Fail")
+    mock_chat_openai.return_value = mock_instance
+    monkeypatch.setattr("apps.llm_router.router.ChatOpenAI", mock_chat_openai)
     
     with pytest.raises(ProviderBudgetExhausted):
         router.chat("nim_fast", [{"role": "user", "content": "hi"}])
@@ -37,19 +39,21 @@ def test_router_fallback(monkeypatch):
     router = LLMRouter()
     router._max_switches = 2
     
-    # Mock NIM to fail, but Ollama to succeed
-    mock_nim = MagicMock()
-    mock_nim.invoke.side_effect = Exception("NIM Fail")
+    # Mock ChatOpenAI to fail
+    mock_chat_openai = MagicMock()
+    mock_instance = MagicMock()
+    mock_instance.invoke.side_effect = Exception("NIM Fail")
+    mock_chat_openai.return_value = mock_instance
+    monkeypatch.setattr("apps.llm_router.router.ChatOpenAI", mock_chat_openai)
     
+    # Mock Ollama to succeed
     mock_ollama = MagicMock()
-    mock_ollama.invoke.return_value = MagicMock(content="Ollama OK")
+    mock_ollama_instance = MagicMock()
+    mock_ollama_instance.invoke.return_value = "Ollama OK"
+    mock_ollama.return_value = mock_ollama_instance
+    monkeypatch.setattr("apps.llm_router.router.Ollama", mock_ollama)
     
-    def mock_get_llm(ctx):
-        if ctx == "nim_fast": return mock_nim
-        return mock_ollama
-        
-    monkeypatch.setattr(router, "get_llm", mock_get_llm)
-    
+    # Ensure it starts with nim_fast
     res = router.chat("nim_fast", [{"role": "user", "content": "hi"}])
     assert res == "Ollama OK"
     assert router._switch_count == 1

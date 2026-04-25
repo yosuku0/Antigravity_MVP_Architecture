@@ -36,12 +36,14 @@ def stage_promotion(job_path: Path, repo_root: Path = None) -> Path:
     staging_dir = repo_root / "work" / "artifacts" / "staging" / job_id
     staging_dir.mkdir(parents=True, exist_ok=True)
     
-    # Copy raw/ content to staging (MVP: simple file copy)
-    raw_dir = repo_root / "raw"
-    if raw_dir.exists():
-        for f in raw_dir.iterdir():
+    # Copy artifacts from memory/working/{job_id} to staging
+    working_dir = repo_root / "memory" / "working" / job_id
+    if working_dir.exists():
+        for f in working_dir.iterdir():
             if f.is_file():
                 shutil.copy2(f, staging_dir / f.name)
+    else:
+        print(f"WARN: Working dir not found: {working_dir}")
     
     # Update status
     frontmatter["status"] = "promotion_pending"

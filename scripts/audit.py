@@ -22,11 +22,25 @@ def audit_artifact(artifact_path: Path) -> dict:
         return result
     
     try:
-        text = artifact_path.read_text(encoding="utf-8")
+        text = artifact_path.read_text(encoding="utf-8").strip()
     except Exception as e:
         result["result"] = "fail"
         result["errors"].append(f"Could not read artifact: {e}")
         return result
+
+    # Strip markdown code blocks if present
+    code_block_match = re.search(r"```(?:python|py)?\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
+    if code_block_match:
+        text = code_block_match.group(1).strip()
+    elif text.startswith("```"):
+        # Fallback for ill-formed blocks
+        lines = text.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        text = "\n".join(lines)
+        if "```" in text:
+            text = text.split("```")[0]
+        text = text.strip()
     
     # Secret scan
     for pattern in SECRET_PATTERNS:

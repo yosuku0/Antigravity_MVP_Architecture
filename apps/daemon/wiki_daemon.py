@@ -183,9 +183,22 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
         frontmatter["status"] = "claimed"
         try:
             write_frontmatter(job_path, frontmatter, body)
-            print(f"Job {job_id} claimed and locked.")
+            print(f"Job {job_id} claimed and locked. Executing...")
+            
+            # Execute graph
+            from apps.runtime.graph import app
+            inputs = {"job_path": str(job_path)}
+            result = app.invoke(inputs)
+            
+            # Update status based on audit result
+            audit_res = result.get("audit_result")
+            new_status = "audit_passed" if audit_res == "pass" else "audit_failed"
+            self.update_job_status(job_id, new_status)
+            print(f"Job {job_id} finished: {new_status}")
+            
         except Exception as e:
-            print(f"Failed to write status for {job_id}: {e}")
+            print(f"Failed to execute job {job_id}: {e}")
+            self.update_job_status(job_id, "failed", reason=str(e))
 
 def main():
     repo_root = Path(__file__).resolve().parents[2]

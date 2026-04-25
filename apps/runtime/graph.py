@@ -155,6 +155,18 @@ def audit_node(state: State) -> State:
         text=True
     )
     
+    # 3. Update frontmatter
+    job_path = Path(state["job_path"])
+    try:
+        from utils.atomic_io import read_frontmatter, write_frontmatter
+        fm, body = read_frontmatter(job_path)
+        fm["audit_result"] = result.stdout.strip().lower()
+        if result.stderr:
+            fm["audit_errors"] = result.stderr.strip()
+        write_frontmatter(job_path, fm, body)
+    except Exception as e:
+        print(f"Error updating audit frontmatter: {e}")
+
     # Parse output
     output = result.stdout.strip()
     if output == "PASS":
