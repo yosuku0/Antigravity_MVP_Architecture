@@ -18,7 +18,17 @@ import re
 from pathlib import Path
 from typing import Any, TypedDict
 
+import sys
 import yaml
+from importlib.util import find_spec
+
+# Add project root to path before local imports
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from domains.knowledge_os import KnowledgeOS
+from utils.atomic_io import atomic_write
 
 # LangGraph imports
 try:
@@ -37,18 +47,8 @@ except ImportError:
     class SqliteSaver:
         def __init__(self, *a, **k): pass
 
-# CrewAI imports
-try:
-    import crewai
-    CREWAI_AVAILABLE = True
-except ImportError:
-    CREWAI_AVAILABLE = False
-
-sys_path = __import__("sys")
-sys_path.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-
-from domains.knowledge_os import KnowledgeOS
-from utils.atomic_io import atomic_write
+# CrewAI availability check
+CREWAI_AVAILABLE = find_spec("crewai") is not None
 
 
 # ── State Schema ──────────────────────────────────────────────────────
