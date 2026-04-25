@@ -22,13 +22,13 @@ import sys
 import yaml
 from importlib.util import find_spec
 
-# Add project root to path before local imports
+from domains.knowledge_os import KnowledgeOS
+from utils.atomic_io import atomic_write
+
+# Add project root to path before other local imports if needed
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-
-from domains.knowledge_os import KnowledgeOS
-from utils.atomic_io import atomic_write
 
 # LangGraph imports
 try:
