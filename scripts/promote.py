@@ -94,6 +94,11 @@ def promote_to_wiki(job_path: Path, approver: str = "higurashi") -> None:
     content = f"---\n{yaml_text}---\n\n{body.strip()}\n"
     atomic_write(job_path, content)
     
+    # After wiki write, update Hermes memory
+    import subprocess
+    hermes_script = repo_root / "scripts" / "hermes_reflect.py"
+    subprocess.run([sys.executable, str(hermes_script)], check=False)
+    
     print(f"PROMOTED: {job_id}")
 
 if __name__ == "__main__":

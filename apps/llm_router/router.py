@@ -56,8 +56,17 @@ class LLMRouter:
             )
         
         elif context == "exploration":
-            # Kimi (placeholder — will be implemented in C-005)
-            raise NotImplementedError("Kimi provider not yet implemented (C-005)")
+            # Kimi Open Platform (OpenAI-compatible)
+            kimi_key = os.environ.get("KIMI_API_KEY")
+            if not kimi_key:
+                # Fallback to NIM if Kimi key not set
+                return self.get_llm("nim_fast")
+            return ChatOpenAI(
+                openai_api_base="https://api.moonshot.cn/v1",
+                openai_api_key=kimi_key,
+                model_name="moonshot-v1-8k",
+                temperature=0.7,
+            )
         
         else:
             # Default fallback: Ollama

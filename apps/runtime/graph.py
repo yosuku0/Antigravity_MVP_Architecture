@@ -102,8 +102,14 @@ def crew_execute_node(state: State) -> State:
     
     # Extract objective from job frontmatter
     job_path = Path(state["job_path"])
-    frontmatter, body = read_frontmatter(job_path)
-    objective = frontmatter.get("objective", body.split("\n")[0] if body else "No objective provided")
+    text = job_path.read_text(encoding="utf-8")
+    if text.startswith("---"):
+        _, rest = text.split("---", 1)
+        yaml_part, _ = rest.split("---", 1)
+        frontmatter = yaml.safe_load(yaml_part) or {}
+        objective = frontmatter.get("objective", "Implement requested feature")
+    else:
+        objective = "Implement requested feature"
 
     # Create task
     task_cfg = tasks["implement_task"]
