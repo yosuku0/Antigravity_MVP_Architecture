@@ -4,6 +4,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from langgraph.graph import StateGraph, END
 import sys
+import yaml
+from crewai import Crew, Agent, Task
 
 # Ensure utils can be imported
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -62,20 +64,56 @@ def router_node(state: State) -> State:
     }
 
 def crew_execute_node(state: State) -> State:
-    """Placeholder for CrewAI execution. Real implementation in B-006."""
-    # This will be replaced in B-006
-    job_id = state.get("job_id", "unknown")
+    """Execute a single CrewAI crew to implement the job objective."""
+    # Load config
     repo_root = Path(__file__).resolve().parents[2]
-    working_dir = repo_root / "memory" / "working" / job_id
-    working_dir.mkdir(parents=True, exist_ok=True)
+    config_dir = repo_root / "apps" / "crew" / "config"
+    with open(config_dir / "roles.yaml", "r", encoding="utf-8") as f:
+        roles = yaml.safe_load(f)
+    with open(config_dir / "tasks.yaml", "r", encoding="utf-8") as f:
+        tasks = yaml.safe_load(f)
     
-    artifact_path = working_dir / "artifact.py"
-    artifact_path.write_text("# Hello World\nprint('hello')", encoding="utf-8")
+    # Create agent
+    dev_role = roles["developer"]
+    developer = Agent(
+        role=dev_role["role"],
+        goal=dev_role["goal"],
+        backstory=dev_role["backstory"],
+        allow_delegation=dev_role.get("allow_delegation", False),
+        verbose=dev_role.get("verbose", True),
+        llm="ollama/qwen2.5:7b"
+    )
+    
+    # Extract objective from job frontmatter
+    job_path = Path(state["job_path"])
+    frontmatter, body = read_frontmatter(job_path)
+    objective = frontmatter.get("objective", body.split("\n")[0] if body else "No objective provided")
+
+    # Create task
+    task_cfg = tasks["implement_task"]
+    job_id = state["job_id"]
+    artifact_dir = repo_root / "memory" / "working" / job_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / "artifact.py"
+    
+    task = Task(
+        description=task_cfg["description"].format(
+            objective=objective,
+            output_path=str(artifact_path)
+        ),
+        expected_output=task_cfg["expected_output"],
+        agent=developer,
+        output_file=str(artifact_path)
+    )
+    
+    # Run crew
+    crew = Crew(agents=[developer], tasks=[task], verbose=True)
+    result = crew.kickoff()
     
     return {
         **state,
         "artifact_path": str(artifact_path),
-        "crew_result": "Success (Placeholder)"
+        "crew_result": str(result)
     }
 
 def audit_node(state: State) -> State:

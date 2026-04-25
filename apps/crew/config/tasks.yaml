@@ -1,0 +1,8 @@
+implement_task:
+  description: |
+    Based on the following job objective, implement the requested code.
+    Job objective: {objective}
+    
+    Write your implementation to the file at: {output_path}
+  expected_output: "Working Python code that fulfills the job objective"
+  agent: developer
