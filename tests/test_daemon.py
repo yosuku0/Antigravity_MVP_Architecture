@@ -62,9 +62,9 @@ def test_daemon_reclaimer(tmp_repo, create_job):
     )
     handler.reclaim_stale_locks()
     
-    # 3. Assert lock moved to archive (mvp: just deleted/reverted)
-    assert not lock_path.exists()
+    # 3. Assert transitioned to failed
     content = job_path.read_text(encoding="utf-8")
-    assert "status: approved_gate_1" in content
+    assert "status: failed" in content
+    assert "reason: stale_lock_recovered" in content
 
 import os

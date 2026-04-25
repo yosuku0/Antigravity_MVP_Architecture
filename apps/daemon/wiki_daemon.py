@@ -109,16 +109,37 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
         except Exception as e:
             print(f"Error updating status for {job_id}: {e}")
 
+    def is_pid_alive(self, pid):
+        """Check if a process is alive (Windows-compatible)."""
+        import subprocess
+        try:
+            # tasklist returns 0 if found, 1 if not found
+            res = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True)
+            return str(pid) in res.stdout
+        except:
+            return False
+
     def reclaim_stale_locks(self):
-        """Check and reclaim locks older than 10 minutes."""
+        """Check and reclaim locks older than 10 minutes OR orphaned by dead processes."""
         now = datetime.now(timezone.utc)
         for lock_file in self.locks_dir.glob("*.lock"):
             try:
+                # Read lock info
+                content = lock_file.read_text().splitlines()
+                pid = None
+                if len(content) >= 2:
+                    pid = int(content[1])
+                
                 # Get file age
                 mtime = datetime.fromtimestamp(lock_file.stat().st_mtime, tz=timezone.utc)
-                if now - mtime > timedelta(minutes=10):
+                
+                is_stale = (now - mtime > timedelta(minutes=10))
+                is_orphaned = (pid is not None and pid != os.getpid() and not self.is_pid_alive(pid))
+                
+                if is_stale or is_orphaned:
                     job_id = lock_file.stem
-                    print(f"Reclaiming stale lock for {job_id}...")
+                    reason = "stale_lock_recovered" if is_stale else "orphaned_lock_recovered"
+                    print(f"Reclaiming {reason} for {job_id} (PID: {pid})...")
                     
                     # 1. Archive
                     archive_dir = self.locks_dir / "archived"
@@ -128,14 +149,19 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
                     shutil.move(str(lock_file), str(archive_path))
                     
                     # 2. Update status
-                    info = self.daemon_state.get(job_id, {})
-                    if info.get("status") in ["executing", "routed"]:
-                        self.update_job_status(job_id, "failed", reason="stale_lock_recovered")
-                    else:
-                        self.update_job_status(job_id, "approved_gate_1")
-                        
+                    # Scan frontmatter to be sure
+                    job_path = self.jobs_dir / f"{job_id}.md"
+                    if job_path.exists():
+                        fm, _ = read_frontmatter(job_path)
+                        status = fm.get("status")
+                        if status in ["claimed", "executing", "routed"]:
+                            self.update_job_status(job_id, "failed", reason=reason)
+                        else:
+                            # If it was already finished but lock stayed, just archive lock
+                            pass
+                    
                     # 3. Log
-                    self.log_event("stale_lock_recovered", job_id, {"archived_to": str(archive_path)})
+                    self.log_event(reason, job_id, {"archived_to": str(archive_path), "pid": pid})
             except Exception as e:
                 print(f"Error reclaiming lock {lock_file}: {e}")
 
@@ -214,6 +240,7 @@ def main():
     # B-002: State rebuild on startup
     handler = WikiDaemonHandler(jobs_dir, locks_dir, logs_dir)
     handler.rebuild_state()
+    handler.reclaim_stale_locks()
 
     # B-003: Stale-lock reclaim (background thread)
     def reclaimer_loop():
