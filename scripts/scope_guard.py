@@ -39,8 +39,14 @@ if __name__ == "__main__":
     for subdir in ["daemon", "runtime", "llm_router", "crew"]:
         v += guard(repo / "apps" / subdir, all_forbidden)
         
-    # Check scripts
-    v += guard(repo / "scripts", all_forbidden)
+    # Check scripts (exclude scope_guard.py itself)
+    for pyfile in (repo / "scripts").glob("*.py"):
+        if pyfile.name == "scope_guard.py":
+            continue
+        text = pyfile.read_text(encoding="utf-8")
+        for forbidden in all_forbidden:
+            if forbidden in text:
+                v.append(f"{pyfile}: found '{forbidden}'")
     
     if v:
         print("SCOPE VIOLATIONS FOUND:")
