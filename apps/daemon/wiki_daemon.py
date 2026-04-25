@@ -2,7 +2,9 @@ import os
 import time
 import json
 import yaml
-from datetime import datetime, timezone
+import shutil
+from datetime import datetime, timezone, timedelta
+from threading import Thread
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
@@ -87,6 +89,55 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
             
         print(f"State rebuilt: {jobs_found} jobs, {locks_found} locks found.")
 
+    def update_job_status(self, job_id, new_status, reason=None):
+        """Helper to update job status atomically."""
+        job_path = self.jobs_dir / f"{job_id}.md"
+        if not job_path.exists():
+            return
+            
+        try:
+            frontmatter, body = read_frontmatter(job_path)
+            frontmatter["status"] = new_status
+            if reason:
+                frontmatter["failure_reason"] = reason
+            write_frontmatter(job_path, frontmatter, body)
+            
+            # Update in-memory state
+            if job_id in self.daemon_state:
+                self.daemon_state[job_id]["status"] = new_status
+        except Exception as e:
+            print(f"Error updating status for {job_id}: {e}")
+
+    def reclaim_stale_locks(self):
+        """Check and reclaim locks older than 10 minutes."""
+        now = datetime.now(timezone.utc)
+        for lock_file in self.locks_dir.glob("*.lock"):
+            try:
+                # Get file age
+                mtime = datetime.fromtimestamp(lock_file.stat().st_mtime, tz=timezone.utc)
+                if now - mtime > timedelta(minutes=10):
+                    job_id = lock_file.stem
+                    print(f"Reclaiming stale lock for {job_id}...")
+                    
+                    # 1. Archive
+                    archive_dir = self.locks_dir / "archived"
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = now.strftime("%Y%m%d%H%M%S")
+                    archive_path = archive_dir / f"{job_id}_{timestamp}.lock"
+                    shutil.move(str(lock_file), str(archive_path))
+                    
+                    # 2. Update status
+                    info = self.daemon_state.get(job_id, {})
+                    if info.get("status") in ["executing", "routed"]:
+                        self.update_job_status(job_id, "failed", reason="stale_lock_recovered")
+                    else:
+                        self.update_job_status(job_id, "approved_gate_1")
+                        
+                    # 3. Log
+                    self.log_event("stale_lock_recovered", job_id, {"archived_to": str(archive_path)})
+            except Exception as e:
+                print(f"Error reclaiming lock {lock_file}: {e}")
+
     def on_created(self, event):
         self.process_job(Path(event.src_path))
 
@@ -147,7 +198,17 @@ def main():
     handler = WikiDaemonHandler(jobs_dir, locks_dir, logs_dir)
     handler.rebuild_state()
 
-    # TODO: B-003 Stale-lock reclaim (background thread)
+    # B-003: Stale-lock reclaim (background thread)
+    def reclaimer_loop():
+        while True:
+            try:
+                handler.reclaim_stale_locks()
+            except Exception as e:
+                print(f"Error in reclaimer loop: {e}")
+            time.sleep(60)
+
+    reclaimer_thread = Thread(target=reclaimer_loop, daemon=True)
+    reclaimer_thread.start()
     observer = Observer()
     observer.schedule(handler, str(jobs_dir), recursive=False)
     observer.start()
