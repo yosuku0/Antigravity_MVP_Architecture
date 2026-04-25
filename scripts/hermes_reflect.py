@@ -24,6 +24,19 @@ def hermes_reflect(wiki_dir: Path, hermes_path: Path) -> None:
     summary += "\n".join(entries)
     summary += "\n"
     
+    # Optional: Index into agentmemory
+    try:
+        from agentmemory import create_memory
+        for f in wiki_dir.iterdir():
+            if f.is_file() and f.suffix == ".md":
+                content = f.read_text(encoding="utf-8")
+                # Metadata for searchability
+                metadata = {"filename": f.name, "type": "wiki_page", "timestamp": datetime.now(timezone.utc).isoformat()}
+                create_memory("hermes_knowledge", content, metadata=metadata)
+        print("[agentmemory] Wiki content indexed for vector search.")
+    except Exception as e:
+        print(f"[agentmemory] Indexing skipped or failed: {e}")
+
     with open(hermes_path, "a", encoding="utf-8") as f:
         f.write(summary)
     
