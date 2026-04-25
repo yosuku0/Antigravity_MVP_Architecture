@@ -22,10 +22,15 @@ The NIM-Kinetic Meta-Agent MVP is a robust, production-ready orchestration syste
 - **Validation**: Pydantic v2, PyYAML
 - **Execution**: Python 3.12
 
-### Known Issues & Limitations
+## Known Limitations (MVP 1.0.0)
 
-- **NIM LiteLLM Authentication**: Direct LiteLLM calls to NVIDIA NIM currently experience 401 errors in some environments. Fallback to Ollama is implemented as a stable alternative for MVP verification.
-- **Sync Code Blocks**: Audit gate extracts the first markdown code block for syntax checking. Multiple blocks per artifact are not yet supported for individual validation.
+### NIM Integration via CrewAI
+- **Status:** Partially functional
+- **Direct NIM API calls (C-002):** Working ✅
+- **NIM through CrewAI execution path:** Returns 401 via LiteLLM
+- **Impact:** Complexity scorer routes to NIM, but execution falls back to Ollama
+- **Workaround:** Ollama is the stable execution driver
+- **Resolution target:** P1 (Phase 1) — migrate to `langchain-nvidia-ai-endpoints` `ChatNVIDIA`
 
 ### Verification Evidence
 
