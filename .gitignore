@@ -17,6 +17,12 @@ logs/
 work/artifacts/
 work/locks/
 memory/working/
+# ChromaDB / local vector store (binary, never commit)
+memory/chroma.sqlite3
+memory/*/data_level0.bin
+memory/*/header.bin
+memory/*/length.bin
+memory/*/link_lists.bin
 wiki/
 
 # OS
