@@ -23,3 +23,4 @@ PyYAML>=6.0
 crewai>=0.30.0
 langchain-openai>=0.2.0
 slack-bolt>=1.20.0
+langchain-nvidia-ai-endpoints>=0.2.0
