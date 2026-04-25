@@ -22,6 +22,15 @@ def execute_squad(squad_name: str, llm, objective: str, artifact_path: Path) -> 
     # Create agents
     agents = {}
     for role_key, role_def in roles.items():
+        # Load tools for this agent
+        agent_tools = []
+        if "tools" in role_def:
+            for tool_name in role_def["tools"]:
+                if tool_name == "web_research":
+                    from apps.crew.squads.research_squad.tools.browser_tool import WebResearchTool
+                    agent_tools.append(WebResearchTool())
+                # Add more tools here as they are integrated
+
         agents[role_key] = Agent(
             role=role_def["role"],
             goal=role_def["goal"],
@@ -29,6 +38,7 @@ def execute_squad(squad_name: str, llm, objective: str, artifact_path: Path) -> 
             allow_delegation=role_def.get("allow_delegation", False),
             verbose=role_def.get("verbose", True),
             llm=llm,
+            tools=agent_tools,
         )
     
     # Create tasks
