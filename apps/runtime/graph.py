@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import json
 import re
+import time
+import subprocess
+import threading
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -75,7 +78,7 @@ class State(TypedDict):
 
 def load_job(state: State) -> State:
     """Read JOB file, extract frontmatter + body."""
-    job_path = Path(state["job_path"])
+    job_path = state["job_path"]
     if not job_path.exists():
         return {**state, "status": "failed", "error": f"JOB not found: {job_path}"}
 
@@ -167,37 +170,48 @@ def squad_router(state: State) -> State:
 
 
 def execute_squads(state: State) -> State:
-    """Execute squads sequentially with domain context injection.
-
-    For each squad:
-      1. Load squad config from apps/crew/squads/{squad}/
-      2. Inject LLM from unified router
-      3. Append domain context to objective
-      4. Execute via CrewAI
-      5. Collect results
-    """
+    """Execute squads sequentially with feedback injection."""
     squads = state.get("squads", [])
     domain = state.get("target_domain")
-    results = []
+    job_path = state.get("job_path")
+    review_feedback = state.get("review_feedback")
+    
+    # Read job content
+    if job_path and job_path.exists():
+        content = job_path.read_text(encoding="utf-8")
+    else:
+        content = state.get("routing_context", "")
+    
+    # Inject review feedback if present (loop iteration)
+    objective = content
+    if review_feedback:
+        objective = f"""{content}
 
+=== PREVIOUS REVIEW FEEDBACK ===
+The following issues were identified in the previous review. Address all of them:
+{review_feedback}
+=== END FEEDBACK ===
+"""
+    
+    results = []
     for squad_name in squads:
         try:
-            result = _execute_single_squad(squad_name, state["routing_context"], domain)
+            result = _execute_single_squad(squad_name, objective, domain)
             results.append(f"{squad_name}: {result}")
         except Exception as e:
             results.append(f"{squad_name}: ERROR — {e}")
 
-    # Write combined result as artifact
+    # Write artifact to staging
+    artifact_path = Path(f"work/artifacts/staging/{state['job_id']}.md")
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_content = "\n\n".join(results)
-    artifact_dir = Path("work/staged")
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = artifact_dir / f"{state['job_id']}_result.md"
-    atomic_write(artifact_path, artifact_content)
-
+    artifact_path.write_text(artifact_content, encoding="utf-8")
+    
     return {
         **state,
+        "status": "reviewing",
         "artifact_path": artifact_path,
-        "status": "auditing",
+        "review_feedback": None,  # Clear feedback for next review
     }
 
 
@@ -251,40 +265,56 @@ def _execute_squad_from_config(
 
 
 def brain_review(state: State) -> State:
-    """Review artifact using review_squad and determine if it passes."""
+    """Review artifact using review_squad."""
     review_count = state.get("review_count", 0) + 1
-    
-    # Placeholder: actual review_squad integration in Step 3
-    # For now, read from blackboard feedback if exists
     artifact_path = state.get("artifact_path")
-    if artifact_path and artifact_path.exists():
+    
+    if not artifact_path or not artifact_path.exists():
+        return {**state, "status": "auditing", "review_count": review_count}
+    
+    # Call brain_review CLI / review_squad
+    result = _call_review_squad(artifact_path)
+    
+    if result.get("passed", False):
+        return {
+            **state,
+            "status": "auditing",
+            "review_feedback": None,
+            "review_count": review_count,
+        }
+    else:
+        return {
+            **state,
+            "status": "reviewing",
+            "review_feedback": result.get("feedback"),
+            "review_count": review_count,
+        }
+
+
+def _call_review_squad(artifact_path: Path) -> dict:
+    """Bridge to scripts/brain_review.py CLI."""
+    import subprocess
+    import sys
+    try:
+        # Run the review CLI using the current interpreter and absolute path
+        script_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "brain_review.py"
+        cmd = [sys.executable, str(script_path), "--artifact", str(artifact_path)]
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        
+        # Parse result from exit code
+        passed = res.returncode == 0
+        
+        # Try to parse JSON feedback if it exists
         feedback_path = Path("work/blackboard/feedback") / f"{artifact_path.stem}.json"
         if feedback_path.exists():
             import json
             with open(feedback_path, "r", encoding="utf-8") as f:
-                result = json.load(f)
-            if result.get("passed", False):
-                return {
-                    **state,
-                    "status": "auditing",
-                    "review_feedback": None,
-                    "review_count": review_count,
-                }
-            else:
-                return {
-                    **state,
-                    "status": "reviewing",
-                    "review_feedback": result.get("feedback"),
-                    "review_count": review_count,
-                }
-    
-    # No artifact to review — pass through to audit
-    return {
-        **state,
-        "status": "auditing",
-        "review_feedback": None,
-        "review_count": review_count,
-    }
+                data = json.load(f)
+                return {"passed": data.get("passed", passed), "feedback": data.get("feedback", "No feedback")}
+        
+        return {"passed": passed, "feedback": (res.stdout + "\n" + res.stderr).strip() or "Review failed"}
+    except Exception as e:
+        return {"passed": False, "feedback": f"Review execution error: {e}"}
 
 
 def audit(state: State) -> State:
@@ -347,6 +377,7 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
     builder.add_node("load_job", load_job)
     builder.add_node("router", router)
     builder.add_node("squad_router", squad_router)
+    builder.add_node("execute_squads", execute_squads)
     builder.add_node("brain_review", brain_review)
     builder.add_node("audit", audit)
 
