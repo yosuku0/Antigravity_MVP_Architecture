@@ -9,7 +9,7 @@ __pycache__/
 
 # Logs
 logs/
-runtime/
+/runtime/
 *.log
 *.jsonl
 
