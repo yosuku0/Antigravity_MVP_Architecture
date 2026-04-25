@@ -20,6 +20,7 @@ import os
 import re
 import time
 import threading
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -157,7 +158,7 @@ class KnowledgeOS:
             "src": src,
             "dst": dst,
             "query": query,
-            "result_hash": hash(result) & 0xFFFFFFFF,
+            "result_hash": hashlib.sha256(result.encode("utf-8")).hexdigest()[:16],
         }
         atomic_append(self._audit_path, json.dumps(entry, ensure_ascii=False))
 
