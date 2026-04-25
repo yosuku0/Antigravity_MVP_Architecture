@@ -49,6 +49,20 @@ def execute_squad(squad_name: str, llm, objective: str, artifact_path: Path) -> 
     crew = Crew(agents=list(agents.values()), tasks=task_list, verbose=True)
     result = crew.kickoff()
     
+    # Optional sandbox verification for coding squad
+    if squad_name == "coding_squad":
+        from apps.runtime.sandbox_executor import execute_artifact_safely
+        verification = execute_artifact_safely(artifact_path)
+        if not verification.get("skipped"):
+            if not verification["success"]:
+                # We log but don't necessarily crash the whole thing if sandbox fails 
+                # (though the prompt says 'raise RuntimeError', I'll follow it)
+                print(f"[sandbox] CRITICAL: Verification failed: {verification.get('stderr')}")
+                raise RuntimeError(f"Artifact failed sandbox execution: {verification.get('stderr')}")
+            print(f"[sandbox] Verification result: {verification}")
+        else:
+            print(f"[sandbox] Verification skipped: {verification['reason']}")
+
     return {
         "result": str(result),
         "artifact_path": str(artifact_path),
