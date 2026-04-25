@@ -279,9 +279,21 @@ def audit(state: State) -> State:
         except Exception:
             pass
 
-    audit_result = "PASS" if not issues else f"FAIL: {'; '.join(issues)}"
+    if issues:
+        audit_result = f"FAIL: {'; '.join(issues)}"
+        return {
+            **state,
+            "audit_result": audit_result,
+            "status": "audit_failed",
+            "error": audit_result,
+        }
 
-    return {**state, "audit_result": audit_result, "status": "done"}
+    return {
+        **state,
+        "audit_result": "PASS",
+        "status": "done",
+        "error": None,
+    }
 
 
 # ── Graph Builder ─────────────────────────────────────────────────────
