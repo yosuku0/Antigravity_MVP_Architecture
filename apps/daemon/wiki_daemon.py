@@ -31,6 +31,7 @@ STAGE_DIR = Path("work/staged")
 STATE_FILE = Path("work/daemon_state.json")
 LOG_FILE = Path("work/daemon.jsonl")
 STALE_MINUTES = 10
+TERMINAL_STATUSES = {"done", "failed", "audit_failed", "promoted", "cancelled"}
 
 
 def rebuild_state() -> dict:
@@ -168,7 +169,7 @@ def process_jobs() -> int:
     count = 0
 
     for job_id, job_info in state.get("jobs", {}).items():
-        if job_info.get("status") in ("done", "failed"):
+        if job_info.get("status") in TERMINAL_STATUSES:
             continue
 
         # Try to acquire lock
