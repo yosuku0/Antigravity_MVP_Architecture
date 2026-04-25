@@ -29,6 +29,9 @@ def execute_squad(squad_name: str, llm, objective: str, artifact_path: Path) -> 
                 if tool_name == "web_research":
                     from apps.crew.squads.research_squad.tools.browser_tool import WebResearchTool
                     agent_tools.append(WebResearchTool())
+                elif tool_name == "file_read":
+                    from crewai_tools import FileReadTool
+                    agent_tools.append(FileReadTool())
                 # Add more tools here as they are integrated
 
         agents[role_key] = Agent(
