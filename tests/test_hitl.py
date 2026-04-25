@@ -7,6 +7,7 @@ from scripts.approve import approve_gate_1, approve_gate_2, approve_gate_3
 from scripts.cancel import cancel_job
 
 def test_gate_1_approval(tmp_repo, create_job):
+    """T007: Manual approval gate 1 correctly transitions status."""
     job_path = create_job("JOB-G1", "created")
     approve_gate_1(job_path, "tester")
     
@@ -16,6 +17,7 @@ def test_gate_1_approval(tmp_repo, create_job):
     assert data["approved_by"] == "tester"
 
 def test_gate_2_rejection(tmp_repo, create_job):
+    """T008: Manual rejection gate 2 correctly transitions status."""
     job_path = create_job("JOB-G2", "audit_passed")
     approve_gate_2(job_path, "tester", reject=True)
     
@@ -24,6 +26,7 @@ def test_gate_2_rejection(tmp_repo, create_job):
     assert data["status"] == "gate_2_rejected"
 
 def test_cancellation(tmp_repo, create_job):
+    """T009: Job cancellation and archival logic."""
     job_id = "JOB-CANCEL"
     job_path = create_job(job_id, "approved_gate_1")
     

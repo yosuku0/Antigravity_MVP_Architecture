@@ -6,6 +6,7 @@ from scripts.audit import audit_artifact
 from scripts.promote import stage_promotion, promote_to_wiki
 
 def test_audit_logic(tmp_path):
+    """T006: Audit gate correctly detects syntax errors and secrets."""
     # Clean
     clean_py = tmp_path / "clean.py"
     clean_py.write_text("print('ok')", encoding="utf-8")
@@ -20,6 +21,7 @@ def test_audit_logic(tmp_path):
     assert "Secret pattern detected" in res["errors"][0]
 
 def test_promotion_flow(tmp_repo, create_job, monkeypatch):
+    """T012: Full promotion flow from working memory to wiki."""
     # Setup: Approved Gate 2 job
     job_id = "JOB-PROMOTE"
     job_path = create_job(job_id, "audit_passed", audit_result="pass", approved_gate_2_by="tester")

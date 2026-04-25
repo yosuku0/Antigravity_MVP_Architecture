@@ -5,6 +5,7 @@ from apps.llm_router.complexity_scorer import classify_task
 from unittest.mock import MagicMock
 
 def test_complexity_scorer():
+    """C-006 verification: Task classification routes correctly."""
     # Trivial
     res = classify_task("Just say hi")
     assert res["recommended_context"] == "classify_local"
@@ -18,6 +19,7 @@ def test_complexity_scorer():
     assert res["recommended_context"] == "nim_fast"
 
 def test_router_budget_exhaustion(monkeypatch):
+    """T013: Provider-switch retry budget exhaustion."""
     # Mock API Key to avoid EnvironmentError
     monkeypatch.setenv("NVIDIA_API_KEY", "mock")
     
@@ -35,6 +37,7 @@ def test_router_budget_exhaustion(monkeypatch):
         router.chat("nim_fast", [{"role": "user", "content": "hi"}])
 
 def test_router_fallback(monkeypatch):
+    """T004: Router fallback activation when NIM fails."""
     monkeypatch.setenv("NVIDIA_API_KEY", "mock")
     router = LLMRouter()
     router._max_switches = 2

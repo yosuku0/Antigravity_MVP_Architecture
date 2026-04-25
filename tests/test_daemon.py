@@ -5,6 +5,7 @@ from pathlib import Path
 from apps.daemon.wiki_daemon import WikiDaemonHandler
 
 def test_daemon_claims_approved_job(tmp_repo, create_job, monkeypatch):
+    """T001: Daemon picking up jobs with approved_gate_1 status."""
     # Mock graph app.invoke to avoid actual execution
     monkeypatch.setattr("apps.runtime.graph.app.invoke", lambda state: {"audit_result": "pass"})
     
@@ -28,6 +29,7 @@ def test_daemon_claims_approved_job(tmp_repo, create_job, monkeypatch):
     assert "status: audit_passed" in content
 
 def test_daemon_rebuild_state(tmp_repo, create_job):
+    """T002: State rebuild from filesystem truth on startup."""
     # 1. Create a claimed job and a lock
     create_job("JOB-CLAIMED", "claimed")
     lock_path = tmp_repo / "work" / "locks" / "JOB-CLAIMED.lock"
@@ -45,6 +47,7 @@ def test_daemon_rebuild_state(tmp_repo, create_job):
     assert state["JOB-CLAIMED"]["status"] == "claimed"
 
 def test_daemon_reclaimer(tmp_repo, create_job):
+    """T003: Stale lock reclamation and recovery to failed."""
     # 1. Create a stale lock (> 10 min)
     job_path = create_job("JOB-STALE", "claimed")
     lock_path = tmp_repo / "work" / "locks" / "JOB-STALE.lock"
