@@ -1,0 +1,21 @@
+# Environment variables (secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Logs
+logs/
+*.log
+*.jsonl
+
+# Working artifacts
+work/artifacts/
+memory/working/
+
+# OS
+.DS_Store
+Thumbs.db
