@@ -138,8 +138,17 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
                 
                 if is_stale or is_orphaned:
                     job_id = lock_file.stem
-                    reason = "stale_lock_recovered" if is_stale else "orphaned_lock_recovered"
-                    print(f"Reclaiming {reason} for {job_id} (PID: {pid})...")
+                    
+                    # T014/T003 distinction:
+                    lock_age_minutes = (now - mtime).total_seconds() / 60
+                    if lock_age_minutes < 10:
+                        # Recent lock = daemon crash during execution (T014)
+                        reason = "no_checkpoint"
+                    else:
+                        # Old lock = stale lock reclaim (T003)
+                        reason = "stale_lock_recovered"
+                        
+                    print(f"Reclaiming lock for {job_id} (Reason: {reason}, PID: {pid})...")
                     
                     # 1. Archive
                     archive_dir = self.locks_dir / "archived"
@@ -161,7 +170,12 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
                             pass
                     
                     # 3. Log
-                    self.log_event(reason, job_id, {"archived_to": str(archive_path), "pid": pid})
+                    self.log_event("lock_recovered", job_id, {
+                        "reason": reason,
+                        "archived_to": str(archive_path), 
+                        "pid": pid,
+                        "age_min": round(lock_age_minutes, 2)
+                    })
             except Exception as e:
                 print(f"Error reclaiming lock {lock_file}: {e}")
 
