@@ -50,19 +50,24 @@ except ImportError:
 # CrewAI availability check
 CREWAI_AVAILABLE = find_spec("crewai") is not None
 
+# Terminal statuses for graph completion
+TERMINAL_STATUSES = {"done", "failed", "audit_failed", "promoted", "cancelled"}
+
 
 # ── State Schema ──────────────────────────────────────────────────────
 
 class State(TypedDict):
     """LangGraph state shared across nodes."""
     job_id: str
-    job_path: str
-    status: str  # queued | routing | executing | auditing | done | failed
+    job_path: Path
+    status: str  # queued | routing | executing | reviewing | auditing | done | failed
     routing_context: str
     squads: list[str]
     target_domain: str | None  # game | market | personal
-    artifact_path: str
+    artifact_path: Path | None
     audit_result: str
+    review_feedback: str | None
+    review_count: int
     error: str | None
 
 
@@ -191,7 +196,7 @@ def execute_squads(state: State) -> State:
 
     return {
         **state,
-        "artifact_path": str(artifact_path),
+        "artifact_path": artifact_path,
         "status": "auditing",
     }
 
@@ -245,10 +250,47 @@ def _execute_squad_from_config(
     return f"[No create_crew() found in {crew_py}]"
 
 
+def brain_review(state: State) -> State:
+    """Review artifact using review_squad and determine if it passes."""
+    review_count = state.get("review_count", 0) + 1
+    
+    # Placeholder: actual review_squad integration in Step 3
+    # For now, read from blackboard feedback if exists
+    artifact_path = state.get("artifact_path")
+    if artifact_path and artifact_path.exists():
+        feedback_path = Path("work/blackboard/feedback") / f"{artifact_path.stem}.json"
+        if feedback_path.exists():
+            import json
+            with open(feedback_path, "r", encoding="utf-8") as f:
+                result = json.load(f)
+            if result.get("passed", False):
+                return {
+                    **state,
+                    "status": "auditing",
+                    "review_feedback": None,
+                    "review_count": review_count,
+                }
+            else:
+                return {
+                    **state,
+                    "status": "reviewing",
+                    "review_feedback": result.get("feedback"),
+                    "review_count": review_count,
+                }
+    
+    # No artifact to review — pass through to audit
+    return {
+        **state,
+        "status": "auditing",
+        "review_feedback": None,
+        "review_count": review_count,
+    }
+
+
 def audit(state: State) -> State:
     """Audit node — secret scan + syntax check + domain leakage check."""
-    artifact_path = Path(state["artifact_path"])
-    if not artifact_path.exists():
+    artifact_path = state.get("artifact_path")
+    if not artifact_path or not artifact_path.exists():
         return {**state, "status": "failed", "error": "Artifact missing after execution"}
 
     issues = []
@@ -305,15 +347,37 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
     builder.add_node("load_job", load_job)
     builder.add_node("router", router)
     builder.add_node("squad_router", squad_router)
-    builder.add_node("execute_squads", execute_squads)
+    builder.add_node("brain_review", brain_review)
     builder.add_node("audit", audit)
 
     builder.set_entry_point("load_job")
     builder.add_edge("load_job", "router")
     builder.add_edge("router", "squad_router")
     builder.add_edge("squad_router", "execute_squads")
-    builder.add_edge("execute_squads", "audit")
-    builder.add_edge("audit", END)
+    
+    # New edge: execute_squads -> brain_review
+    builder.add_edge("execute_squads", "brain_review")
+
+    # Conditional logic for brain_review
+    builder.add_conditional_edges(
+        "brain_review",
+        lambda state: (
+            "audit" if state.get("status") == "auditing"
+            else "execute_squads" if state.get("status") == "reviewing" and state.get("review_count", 0) < 3
+            else "failed"
+        ),
+        {
+            "audit": "audit",
+            "execute_squads": "execute_squads",
+            "failed": END,
+        }
+    )
+
+    # Audit to END if terminal
+    builder.add_conditional_edges(
+        "audit",
+        lambda state: END if state.get("status") in TERMINAL_STATUSES else "audit"
+    )
 
     # Checkpointing for resilience
     if LANGGRAPH_AVAILABLE:
@@ -337,13 +401,15 @@ def run_job(job_path: str, job_id: str | None = None) -> dict[str, Any]:
 
     initial_state: State = {
         "job_id": job_id,
-        "job_path": job_path,
+        "job_path": Path(job_path),
         "status": "queued",
         "routing_context": "",
         "squads": [],
         "target_domain": None,
-        "artifact_path": "",
+        "artifact_path": None,
         "audit_result": "",
+        "review_feedback": None,
+        "review_count": 0,
         "error": None,
     }
 
