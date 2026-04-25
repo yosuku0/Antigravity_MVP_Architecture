@@ -211,17 +211,17 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
             # Lock already exists, another process took it
             return
 
-        self.log_event("job_claimed", job_id, {"message": "Atomic lock acquired"})
-        self.daemon_state[job_id] = {
-            "status": "claimed",
-            "lock_path": str(lock_path),
-            "claimed_at": datetime.now(timezone.utc).isoformat(),
-            "pid": os.getpid()
-        }
-        
-        # Transition status to claimed
-        frontmatter["status"] = "claimed"
         try:
+            self.log_event("job_claimed", job_id, {"message": "Atomic lock acquired"})
+            self.daemon_state[job_id] = {
+                "status": "claimed",
+                "lock_path": str(lock_path),
+                "claimed_at": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid()
+            }
+            
+            # Transition status to claimed
+            frontmatter["status"] = "claimed"
             write_frontmatter(job_path, frontmatter, body)
             print(f"Job {job_id} claimed and locked. Executing...")
             
@@ -246,6 +246,11 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
         except Exception as e:
             print(f"Failed to execute job {job_id}: {e}")
             self.update_job_status(job_id, "failed", reason=str(e))
+        finally:
+            # Release lock
+            if lock_path.exists():
+                os.remove(lock_path)
+                print(f"Lock released for {job_id}")
 
 def main():
     repo_root = Path(__file__).resolve().parents[2]
