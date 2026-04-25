@@ -11,6 +11,8 @@ from crewai import Crew, Agent, Task
 # Ensure utils can be imported
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from utils.atomic_io import read_frontmatter
+from apps.llm_router.complexity_scorer import classify_task
+from apps.llm_router.router import LLMRouter
 
 class State(TypedDict):
     job_id: str
@@ -58,11 +60,19 @@ def load_job_node(state: State) -> State:
     }
 
 def router_node(state: State) -> State:
-    """Route the job to a context. Placeholder for MVP."""
-    # TODO: Replace with real routing in Block C (C-006)
+    """Classify task and set routing_context."""
+    job_path = Path(state["job_path"])
+    frontmatter, body = read_frontmatter(job_path)
+    objective = frontmatter.get("objective", body.split("\n")[0] if body else "Implement requested feature")
+    
+    classification = classify_task(objective)
+    routing_context = classification["recommended_context"]
+    
+    print(f"[router] Task classified as {classification['level']} → {routing_context}")
+    
     return {
         **state,
-        "routing_context": "classify_local"
+        "routing_context": routing_context,
     }
 
 def crew_execute_node(state: State) -> State:
@@ -75,6 +85,10 @@ def crew_execute_node(state: State) -> State:
     with open(config_dir / "tasks.yaml", "r", encoding="utf-8") as f:
         tasks = yaml.safe_load(f)
     
+    # Get LLM from router
+    router = LLMRouter()
+    llm = router.get_llm(state["routing_context"])
+    
     # Create agent
     dev_role = roles["developer"]
     developer = Agent(
@@ -83,7 +97,7 @@ def crew_execute_node(state: State) -> State:
         backstory=dev_role["backstory"],
         allow_delegation=dev_role.get("allow_delegation", False),
         verbose=dev_role.get("verbose", True),
-        llm="ollama/qwen2.5:7b"
+        llm=llm
     )
     
     # Extract objective from job frontmatter
