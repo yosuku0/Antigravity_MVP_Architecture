@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Send Slack DM notifications for HITL gates."""
 import os
-import sys
 from pathlib import Path
 from slack_sdk import WebClient
 from dotenv import load_dotenv

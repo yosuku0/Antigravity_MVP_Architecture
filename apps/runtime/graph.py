@@ -14,9 +14,7 @@ Domain awareness:
 from __future__ import annotations
 
 import json
-import os
 import re
-import time
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -41,7 +39,7 @@ except ImportError:
 
 # CrewAI imports
 try:
-    from crewai import Agent, Crew, Task, LLM
+    import crewai
     CREWAI_AVAILABLE = True
 except ImportError:
     CREWAI_AVAILABLE = False
@@ -49,8 +47,8 @@ except ImportError:
 sys_path = __import__("sys")
 sys_path.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from domains.knowledge_os import KnowledgeOS, DomainError
-from utils.atomic_io import atomic_write, atomic_append
+from domains.knowledge_os import KnowledgeOS
+from utils.atomic_io import atomic_write
 
 
 # ── State Schema ──────────────────────────────────────────────────────
@@ -274,7 +272,6 @@ def audit(state: State) -> State:
     domain = state.get("target_domain")
     if domain:
         try:
-            kos = KnowledgeOS()
             # Check if artifact references other domains without derive()
             for other in {"game", "market", "personal"} - {domain}:
                 if other in content.lower() and f"derived_from: {other}" not in content:

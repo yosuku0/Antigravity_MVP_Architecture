@@ -18,11 +18,11 @@ import sys
 import time
 from pathlib import Path
 
+from utils.atomic_io import atomic_write, atomic_append
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-
-from utils.atomic_io import atomic_write, atomic_append
 
 
 LOCK_DIR = Path("work/locks")

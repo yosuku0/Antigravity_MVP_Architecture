@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Knowledge ingestion script using liteparse."""
 import argparse
-import os
-import sys
 from pathlib import Path
 from utils.atomic_io import atomic_write
 
