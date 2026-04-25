@@ -1,55 +1,102 @@
 #!/usr/bin/env python3
-"""One-way reflection: append wiki/ changes to runtime/hermes/memory.md."""
+"""
+hermes_reflect.py — Wiki → Hermes memory reflection
+
+Reads promoted wiki documents, indexes them into agentmemory vector store
+for semantic retrieval by future squads.
+
+Phase B enhancement: domain-aware indexing — each domain gets its own
+ChromaDB collection for isolation.
+"""
+
 import argparse
+import json
 import sys
+import time
 from pathlib import Path
-from datetime import datetime, timezone
 
-def hermes_reflect(wiki_dir: Path, hermes_path: Path) -> None:
-    """Scan wiki/ for new/modified files and append summary to Hermes memory."""
-    hermes_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    entries = []
-    if wiki_dir.exists():
-        for f in sorted(wiki_dir.iterdir()):
-            if f.is_file():
-                mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
-                entries.append(f"- {f.name} (updated {mtime.isoformat()})")
-    
-    if not entries:
-        print("No wiki changes to reflect.")
-        return
-    
-    summary = f"\n## Reflection at {datetime.now(timezone.utc).isoformat()}\n"
-    summary += "\n".join(entries)
-    summary += "\n"
-    
-    # Optional: Index into agentmemory
-    try:
-        from agentmemory import create_memory
-        for f in wiki_dir.iterdir():
-            if f.is_file() and f.suffix == ".md":
-                content = f.read_text(encoding="utf-8")
-                # Metadata for searchability
-                metadata = {"filename": f.name, "type": "wiki_page", "timestamp": datetime.now(timezone.utc).isoformat()}
-                create_memory("hermes_knowledge", content, metadata=metadata)
-        print("[agentmemory] Wiki content indexed for vector search.")
-    except Exception as e:
-        print(f"[agentmemory] Indexing skipped or failed: {e}")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-    with open(hermes_path, "a", encoding="utf-8") as f:
-        f.write(summary)
-    
-    print(f"Hermes memory updated: {len(entries)} entries")
+from domains.knowledge_os import KnowledgeOS, VALID_DOMAINS
+
+# Try to import agentmemory
+try:
+    import agentmemory
+    AGENTMEMORY_AVAILABLE = True
+except ImportError:
+    AGENTMEMORY_AVAILABLE = False
+
+
+def extract_body(content: str) -> str:
+    """Strip YAML frontmatter from wiki document."""
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            return parts[2].strip()
+    return content
+
+
+def index_domain_wiki(domain: str, kos: KnowledgeOS) -> int:
+    """Index all wiki documents for a domain into vector store."""
+    if not AGENTMEMORY_AVAILABLE:
+        print(f"[WARN] agentmemory not installed — skipping vector indexing for {domain}")
+        return 0
+
+    wiki_dir = kos.root / domain / "wiki"
+    if not wiki_dir.exists():
+        return 0
+
+    collection_name = f"domain_{domain}"
+    count = 0
+
+    for path in wiki_dir.glob("*.md"):
+        try:
+            content = path.read_text(encoding="utf-8")
+            body = extract_body(content)
+            topic = path.stem
+
+            agentmemory.store_memory(
+                collection_name=collection_name,
+                document=body,
+                metadata={"topic": topic, "domain": domain, "source": str(path)},
+            )
+            count += 1
+        except Exception as e:
+            print(f"  [WARN] Failed to index {path}: {e}")
+
+    return count
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Wiki → Hermes reflection")
+    parser.add_argument(
+        "--domain",
+        choices=list(VALID_DOMAINS),
+        default=None,
+        help="Index specific domain only",
+    )
+    parser.add_argument(
+        "--all", action="store_true", help="Index all domains"
+    )
+    args = parser.parse_args()
+
+    kos = KnowledgeOS()
+    domains = [args.domain] if args.domain else list(VALID_DOMAINS) if args.all else []
+
+    if not domains:
+        print("Usage: --domain <name> | --all")
+        return 1
+
+    total = 0
+    for domain in domains:
+        print(f"Indexing domain:{domain} ...")
+        count = index_domain_wiki(domain, kos)
+        print(f"  Indexed {count} documents")
+        total += count
+
+    print(f"\nTotal indexed: {total} documents")
+    return 0
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--wiki-dir", default="wiki", help="Wiki directory")
-    parser.add_argument("--hermes", default="runtime/hermes/memory.md", help="Hermes memory file")
-    args = parser.parse_args()
-    
-    repo_root = Path(__file__).resolve().parents[1]
-    wiki_path = repo_root / args.wiki_dir
-    hermes_path = repo_root / args.hermes
-    
-    hermes_reflect(wiki_path, hermes_path)
+    sys.exit(main())

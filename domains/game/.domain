@@ -1,0 +1,6 @@
+name: game
+description: Game development knowledge — design patterns, mechanics, balance, narrative
+allowed_squads:
+  - coding_squad
+  - review_squad
+  - research_squad

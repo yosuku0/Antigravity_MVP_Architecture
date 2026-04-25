@@ -1,0 +1,6 @@
+name: personal
+description: Personal knowledge base — notes, learning, reflections, preferences
+allowed_squads:
+  - review_squad
+  - research_squad
+  - coding_squad

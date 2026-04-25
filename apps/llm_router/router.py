@@ -1,100 +1,119 @@
-#!/usr/bin/env python3
-"""Unified LLM router for NIM, Ollama, and paid providers."""
+"""
+router.py — Unified LLM Router: NIM + Ollama coexistence
+
+Usage:
+    router = UnifiedRouter()
+    llm = router.get_llm("nim_fast")      # NIM for speed
+    llm = router.get_llm("nim_cheap")     # NIM cost-optimized
+    llm = router.get_llm("classify_local") # Ollama for privacy
+
+Provider-switch budget:
+    - Max 2 switches per job, then FAILED
+    - Track usage in model_calls.jsonl
+"""
+
+from __future__ import annotations
+
+import json
 import os
+import time
 from pathlib import Path
-from dotenv import load_dotenv
-from crewai import LLM
 
-env_path = Path(__file__).resolve().parents[2] / ".env"
-if env_path.exists():
-    load_dotenv(dotenv_path=env_path)
+# CrewAI LLM (our preferred wrapper)
+try:
+    from crewai import LLM
+    CREWAI_LLM_AVAILABLE = True
+except ImportError:
+    CREWAI_LLM_AVAILABLE = False
+    LLM = None
 
-# LangChain / CrewAI imports for testing and logic
-from langchain_community.llms import Ollama
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from utils.atomic_io import atomic_append
 
-class ProviderBudgetExhausted(Exception):
-    """Raised when an LLM provider budget is exhausted (MVP stub)."""
+
+class ProviderExhaustedError(Exception):
+    """Raised when provider-switch budget is exceeded."""
     pass
 
-class LLMRouter:
-    def __init__(self):
-        self.nvidia_api_key = os.environ.get("NVIDIA_API_KEY") or os.environ.get("NIM_API_KEY")
-        self._switch_count = 0
-        self._max_switches = 3
-    
-    def get_llm(self, context: str):
-        """Return a crewai.LLM instance for the given routing context."""
-        
-        if context in ("nim_fast", "nim_cheap", "classify_remote"):
-            if not self.nvidia_api_key:
-                raise EnvironmentError("NVIDIA_API_KEY not set")
-            return LLM(
-                model="openai/meta/llama-3.1-8b-instruct",
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.nvidia_api_key,
-                temperature=0.7,
-                max_tokens=512,
-            )
-        
-        elif context in ("nim_large", "nim_code", "review"):
-            if not self.nvidia_api_key:
-                raise EnvironmentError("NVIDIA_API_KEY not set")
-            return LLM(
-                model="openai/meta/llama-3.3-70b-instruct",
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.nvidia_api_key,
-                temperature=0.5,
-                max_tokens=1024,
-            )
-        
-        elif context == "classify_local":
-            return LLM(
-                model="ollama/qwen2.5:7b",
-                base_url="http://localhost:11434",
-            )
-        
-        elif context == "exploration":
-            return self.get_llm("nim_fast")
-        
-        else:
-            return LLM(model="ollama/qwen2.5:7b", base_url="http://localhost:11434")
-    
-    def chat(self, context: str, messages: list, max_retries: int = 2) -> str:
-        try:
-            # For chat(), use LangChain directly
-            if context.startswith("nim") or context == "classify_remote":
-                lc_llm = ChatOpenAI(
-                    model="meta/llama-3.1-8b-instruct" if "fast" in context else "meta/llama-3.3-70b-instruct",
-                    openai_api_key=self.nvidia_api_key,
-                    openai_api_base="https://integrate.api.nvidia.com/v1"
-                )
-            else:
-                lc_llm = Ollama(model="qwen2.5:7b", base_url="http://localhost:11434")
-            
-            lc_messages = []
-            for m in messages:
-                if m["role"] == "system":
-                    lc_messages.append(SystemMessage(content=m["content"]))
-                else:
-                    lc_messages.append(HumanMessage(content=m["content"]))
-            
-            res = lc_llm.invoke(lc_messages)
-            if hasattr(res, "content"):
-                return res.content
-            return str(res)
-        except Exception as e:
-            self._switch_count += 1
-            if self._switch_count >= self._max_switches:
-                raise ProviderBudgetExhausted(f"Retry budget exhausted: {e}")
-                
-            if max_retries > 0 and not context.startswith("classify_local"):
-                print(f"Router fallback due to: {e}")
-                return self.chat("classify_local", messages, max_retries - 1)
-            raise
 
-if __name__ == "__main__":
-    router = LLMRouter()
-    print("NIM LLM:", router.get_llm("nim_fast"))
-    print("Ollama LLM:", router.get_llm("classify_local"))
+class UnifiedRouter:
+    """Routes LLM calls between NIM (cloud) and Ollama (local).
+
+    Key implementation detail:
+      Uses crewai.LLM with openai/ prefix for NIM to avoid 401 errors.
+      This sends requests through OpenAI-compatible endpoint at
+      https://integrate.api.nvidia.com/v1 with proper auth.
+    """
+
+    MAX_SWITCHES = 2
+
+    def __init__(self, log_path: str = "work/model_calls.jsonl") -> None:
+        self.nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "")
+        self.ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        self.log_path = Path(log_path)
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._switch_count = 0
+
+    def get_llm(self, context: str):
+        """Get appropriate LLM for the given context.
+
+        Contexts:
+            nim_fast      → NIM Llama 3.1 8B (fast inference)
+            nim_cheap     → NIM Llama 3.1 8B (cost-optimized)
+            classify_local → Ollama qwen2.5:7b (local, private)
+            code_local    → Ollama qwen2.5-coder:7b (local coding)
+        """
+        if not CREWAI_LLM_AVAILABLE:
+            raise RuntimeError("CrewAI not installed — cannot create LLM")
+
+        if context in ("nim_fast", "nim_cheap"):
+            if not self.nvidia_api_key:
+                raise RuntimeError("NVIDIA_API_KEY not set")
+            llm = LLM(
+                model='openai/meta/llama-3.1-8b-instruct',
+                base_url='https://integrate.api.nvidia.com/v1',
+                api_key=self.nvidia_api_key,
+            )
+            self._log_call("nvidia_nim", "meta/llama-3.1-8b-instruct", context)
+            return llm
+
+        elif context == "classify_local":
+            llm = LLM(model='ollama/qwen2.5:7b', base_url=self.ollama_host)
+            self._log_call("ollama", "qwen2.5:7b", context)
+            return llm
+
+        elif context == "code_local":
+            llm = LLM(model='ollama/qwen2.5-coder:7b', base_url=self.ollama_host)
+            self._log_call("ollama", "qwen2.5-coder:7b", context)
+            return llm
+
+        else:
+            # Default: try NIM, fallback to Ollama
+            if self.nvidia_api_key:
+                return self.get_llm("nim_fast")
+            return self.get_llm("classify_local")
+
+    def switch_provider(self) -> str:
+        """Switch provider (counts toward MAX_SWITCHES budget).
+
+        Returns:
+            Name of new provider
+
+        Raises:
+            ProviderExhaustedError: if budget exceeded
+        """
+        if self._switch_count >= self.MAX_SWITCHES:
+            raise ProviderExhaustedError(
+                f"Provider-switch budget exceeded ({self.MAX_SWITCHES} max)"
+            )
+        self._switch_count += 1
+        self._log_call("system", "provider_switch", f"switch_{self._switch_count}")
+        return "ollama" if self._switch_count % 2 == 1 else "nvidia_nim"
+
+    def _log_call(self, provider: str, model: str, context: str) -> None:
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "provider": provider,
+            "model": model,
+            "context": context,
+        }
+        atomic_append(self.log_path, json.dumps(entry, ensure_ascii=False))

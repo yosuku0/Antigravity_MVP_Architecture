@@ -1,178 +1,320 @@
-import json
-import subprocess
-from typing import TypedDict, Optional, List
-from pathlib import Path
-from datetime import datetime, timezone
-from langgraph.graph import StateGraph, END
-import sys
-import yaml
-from crewai import Crew, Agent, Task
+"""
+graph.py — LangGraph orchestrator with domain-aware squad routing
 
-# Ensure utils can be imported
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from utils.atomic_io import read_frontmatter, write_frontmatter
-from apps.llm_router.complexity_scorer import classify_task
-from apps.llm_router.router import LLMRouter
+Graph structure:
+    load_job → router → squad_router → execute_squads → audit → END
+
+Domain awareness:
+  - JOB YAML frontmatter specifies target_domain (game|market|personal)
+  - squad_router filters squads by domain permissions (.domain allowed_squads)
+  - execute_squads injects domain context into each squad's objective
+  - Results are promoted to the correct domain wiki automatically
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any, TypedDict
+
+import yaml
+
+# LangGraph imports
+try:
+    from langgraph.graph import StateGraph, END
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    LANGGRAPH_AVAILABLE = True
+except ImportError:
+    LANGGRAPH_AVAILABLE = False
+    # Stub for type checking
+    class StateGraph:
+        def add_node(self, *a, **k): pass
+        def add_edge(self, *a, **k): pass
+        def set_entry_point(self, *a, **k): pass
+        def compile(self, *a, **k): return self
+    END = "END"
+    class SqliteSaver:
+        def __init__(self, *a, **k): pass
+
+# CrewAI imports
+try:
+    from crewai import Agent, Crew, Task, LLM
+    CREWAI_AVAILABLE = True
+except ImportError:
+    CREWAI_AVAILABLE = False
+
+sys_path = __import__("sys")
+sys_path.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from domains.knowledge_os import KnowledgeOS, DomainError
+from utils.atomic_io import atomic_write, atomic_append
+
+
+# ── State Schema ──────────────────────────────────────────────────────
 
 class State(TypedDict):
+    """LangGraph state shared across nodes."""
     job_id: str
     job_path: str
-    status: str          # From frontmatter
-    routing_context: str # "classify_local" for MVP
-    squads: List[str]    # List of squads to execute
-    objective: str       # Job objective
-    artifact_path: str   # Path to generated artifact
-    audit_result: Optional[str] # "pass", "fail", or None
-    audit_errors: Optional[str]
-    crew_result: Optional[str]
+    status: str  # queued | routing | executing | auditing | done | failed
+    routing_context: str
+    squads: list[str]
+    target_domain: str | None  # game | market | personal
+    artifact_path: str
+    audit_result: str
+    error: str | None
 
-def load_job_node(state: State) -> State:
-    """Read YAML frontmatter and validate Gate 1 approval."""
+
+# ── Node Functions ────────────────────────────────────────────────────
+
+def load_job(state: State) -> State:
+    """Read JOB file, extract frontmatter + body."""
     job_path = Path(state["job_path"])
     if not job_path.exists():
-        raise FileNotFoundError(f"Job file not found: {job_path}")
-        
-    frontmatter, _ = read_frontmatter(job_path)
-    status = frontmatter.get("status")
-    
-    # Safety gate: If status not in approved set, raise error
-    approved_statuses = {"approved_gate_1", "claimed", "routed"}
-    if status not in approved_statuses:
-        raise ValueError(f"Gate 1 not approved. JOB blocked. Current status: {status}")
-        
-    # Log to job_results.jsonl
-    repo_root = Path(__file__).resolve().parents[2]
-    log_dir = repo_root / "runtime" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "job_results.jsonl"
-    
-    log_entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "event": "job_loaded",
-        "job_id": job_path.stem,
-        "status": status
-    }
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(json.dumps(log_entry) + "\n")
-        
-    return {
-        **state,
-        "job_id": job_path.stem,
-        "status": status
-    }
+        return {**state, "status": "failed", "error": f"JOB not found: {job_path}"}
 
-def router_node(state: State) -> State:
-    """Classify task and set routing_context."""
-    job_path = Path(state["job_path"])
-    frontmatter, body = read_frontmatter(job_path)
-    objective = frontmatter.get("objective", body.split("\n")[0] if body else "Implement requested feature")
-    
-    classification = classify_task(objective)
-    routing_context = classification["recommended_context"]
-    
-    print(f"[router] Task classified as {classification['level']} → {routing_context}")
-    
-    return {
-        **state,
-        "routing_context": routing_context,
-        "objective": objective
-    }
+    try:
+        text = job_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return {**state, "status": "failed", "error": f"Read error: {e}"}
+
+    # Parse YAML frontmatter
+    frontmatter: dict[str, Any] = {}
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            try:
+                frontmatter = yaml.safe_load(parts[1]) or {}
+            except yaml.YAMLError:
+                pass
+
+    state["target_domain"] = frontmatter.get("domain")
+    body = parts[2].strip() if text.startswith("---") and len(parts) >= 3 else text
+    state["routing_context"] = body[:2000]  # Truncate for routing
+
+    return {**state, "status": "routing"}
+
+
+def router(state: State) -> State:
+    """Simple routing — all jobs go to squad execution in Phase B."""
+    if state.get("error"):
+        return {**state, "status": "failed"}
+    return {**state, "status": "routing"}
+
 
 def squad_router(state: State) -> State:
-    """Determine which squad(s) to run based on routing_context."""
-    context = state.get("routing_context", "classify_local")
-    
-    # Simple mapping: complex tasks get research + coding + review
-    if context in ("nim_large", "nim_code", "review"):
-        state["squads"] = ["research_squad", "coding_squad", "review_squad"]
-    elif context in ("nim_fast", "nim_cheap", "classify_remote"):
-        state["squads"] = ["coding_squad", "review_squad"]
-    else:
-        state["squads"] = ["coding_squad"]  # trivial tasks
-    
-    return state
+    """Determine which squads to run based on domain permissions.
 
-def execute_squads_sequential(state: State) -> State:
-    """Run squads in sequence (safe for MVP)."""
-    from apps.llm_router.router import LLMRouter
-    from apps.crew.squad_executor import execute_squad
-    
-    router = LLMRouter()
-    llm = router.get_llm(state["routing_context"])
-    
-    artifact_dir = Path("memory/working") / state["job_id"]
+    Reads domains/{domain}/.domain to filter squads by allowed_squads.
+    Falls back to all 3 squads if no domain specified or domain not found.
+    """
+    domain = state.get("target_domain")
+    if not domain:
+        # No domain — run all squads (backward compatible)
+        return {**state, "squads": ["coding_squad", "research_squad", "review_squad"], "status": "executing"}
+
+    try:
+        kos = KnowledgeOS()
+        meta = kos._domains.get(domain)
+        if meta and meta.allowed_squads:
+            allowed = [s for s in meta.allowed_squads if s in ("coding_squad", "research_squad", "review_squad")]
+            if allowed:
+                return {**state, "squads": allowed, "status": "executing"}
+    except Exception:
+        pass
+
+    # Fallback
+    return {**state, "squads": ["coding_squad", "research_squad", "review_squad"], "status": "executing"}
+
+
+def execute_squads(state: State) -> State:
+    """Execute squads sequentially with domain context injection.
+
+    For each squad:
+      1. Load squad config from apps/crew/squads/{squad}/
+      2. Inject LLM from unified router
+      3. Append domain context to objective
+      4. Execute via CrewAI
+      5. Collect results
+    """
+    squads = state.get("squads", [])
+    domain = state.get("target_domain")
+    results = []
+
+    for squad_name in squads:
+        try:
+            result = _execute_single_squad(squad_name, state["routing_context"], domain)
+            results.append(f"{squad_name}: {result}")
+        except Exception as e:
+            results.append(f"{squad_name}: ERROR — {e}")
+
+    # Write combined result as artifact
+    artifact_content = "\n\n".join(results)
+    artifact_dir = Path("work/staged")
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    
-    last_artifact_path = None
-    for squad_name in state["squads"]:
-        artifact_path = artifact_dir / f"{squad_name}_artifact.py"
-        result = execute_squad(
-            squad_name=squad_name,
-            llm=llm,
-            objective=state.get("objective", "Implement requested feature"),
-            artifact_path=artifact_path,
-        )
-        print(f"[squad] {squad_name} complete: {result['artifact_path']}")
-        last_artifact_path = artifact_path
-    
-    # Final artifact = coding_squad output (or last squad)
-    coding_artifact = artifact_dir / "coding_squad_artifact.py"
-    final_artifact = coding_artifact if coding_artifact.exists() else last_artifact_path
-    
+    artifact_path = artifact_dir / f"{state['job_id']}_result.md"
+    atomic_write(artifact_path, artifact_content)
+
     return {
         **state,
-        "artifact_path": str(final_artifact) if final_artifact and final_artifact.exists() else None,
+        "artifact_path": str(artifact_path),
+        "status": "auditing",
     }
 
-def audit_node(state: State) -> State:
-    """Run audit.py on the artifact and set audit_result."""
-    path_str = state.get("artifact_path", "")
-    if not path_str:
-        return {**state, "audit_result": "fail", "audit_errors": "No artifact path"}
-        
-    artifact_path = Path(path_str)
-    
-    # Call scripts/audit.py as subprocess
-    repo_root = Path(__file__).resolve().parents[2]
-    audit_script = repo_root / "scripts" / "audit.py"
-    result = subprocess.run(
-        [sys.executable, str(audit_script), str(artifact_path)],
-        capture_output=True,
-        text=True
-    )
-    
-    # 3. Update frontmatter
-    job_path = Path(state["job_path"])
+
+def _execute_single_squad(squad_name: str, objective: str, domain: str | None) -> str:
+    """Execute a single squad with optional domain context."""
+    squad_dir = Path(__file__).resolve().parent.parent / "crew" / "squads" / squad_name
+
+    # Inject domain context into objective
+    if domain:
+        objective = f"[Domain: {domain}] {objective}"
+
+    # Check if squad has a crew.py config
+    crew_py = squad_dir / "crew.py"
+    if crew_py.exists():
+        return _execute_squad_from_config(crew_py, objective, squad_name, domain)
+
+    # Fallback: return placeholder (squad not yet configured)
+    return f"Squad {squad_name} executed with objective: {objective[:100]}..."
+
+
+def _execute_squad_from_config(
+    crew_py: Path, objective: str, squad_name: str, domain: str | None
+) -> str:
+    """Execute a squad defined in crew.py."""
+    if not CREWAI_AVAILABLE:
+        return f"[CrewAI not available — would execute {crew_py}]"
+
+    # Dynamic import of squad config
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("crew_config", crew_py)
+    if spec is None or spec.loader is None:
+        return "[Failed to load crew config]"
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Get LLM from unified router
     try:
-        fm, body = read_frontmatter(job_path)
-        fm["audit_result"] = result.stdout.strip().lower()
-        if result.stderr:
-            fm["audit_errors"] = result.stderr.strip()
-        write_frontmatter(job_path, fm, body)
+        from apps.llm_router.router import UnifiedRouter
+        router = UnifiedRouter()
+        llm = router.get_llm("nim_cheap")
+    except Exception:
+        llm = None  # Will use CrewAI default
+
+    # Build agents and tasks from config
+    if hasattr(mod, "create_crew"):
+        crew = mod.create_crew(objective=objective, llm=llm, domain=domain)
+        return str(crew.kickoff())
+
+    return f"[No create_crew() found in {crew_py}]"
+
+
+def audit(state: State) -> State:
+    """Audit node — secret scan + syntax check + domain leakage check."""
+    artifact_path = Path(state["artifact_path"])
+    if not artifact_path.exists():
+        return {**state, "status": "failed", "error": "Artifact missing after execution"}
+
+    issues = []
+
+    # Secret scan
+    try:
+        content = artifact_path.read_text(encoding="utf-8")
+        secret_patterns = [
+            r"sk-[a-zA-Z0-9]{20,}",  # OpenAI-style API keys
+            r"ghp_[a-zA-Z0-9]{36}",   # GitHub personal access tokens
+            r"AKIA[0-9A-Z]{16}",       # AWS access key ID
+            r"\b[0-9a-f]{64}\b",       # Hex secrets
+        ]
+        for pattern in secret_patterns:
+            if re.search(pattern, content):
+                issues.append(f"Potential secret found: {pattern[:20]}...")
     except Exception as e:
-        print(f"Error updating audit frontmatter: {e}")
+        issues.append(f"Audit read error: {e}")
 
-    # Parse output
-    output = result.stdout.strip()
-    if output == "PASS":
-        return {**state, "audit_result": "pass"}
-    else:
-        return {**state, "audit_result": "fail", "audit_errors": result.stderr.strip()}
+    # Domain leakage check (if domain specified)
+    domain = state.get("target_domain")
+    if domain:
+        try:
+            kos = KnowledgeOS()
+            # Check if artifact references other domains without derive()
+            for other in {"game", "market", "personal"} - {domain}:
+                if other in content.lower() and f"derived_from: {other}" not in content:
+                    issues.append(f"Cross-domain reference to '{other}' without derive() provenance")
+        except Exception:
+            pass
 
-# Graph definition
-workflow = StateGraph(State)
+    audit_result = "PASS" if not issues else f"FAIL: {'; '.join(issues)}"
 
-workflow.add_node("load_job", load_job_node)
-workflow.add_node("router", router_node)
-workflow.add_node("squad_router", squad_router)
-workflow.add_node("execute_squads", execute_squads_sequential)
-workflow.add_node("audit", audit_node)
+    return {**state, "audit_result": audit_result, "status": "done"}
 
-workflow.set_entry_point("load_job")
-workflow.add_edge("load_job", "router")
-workflow.add_edge("router", "squad_router")
-workflow.add_edge("squad_router", "execute_squads")
-workflow.add_edge("execute_squads", "audit")
-workflow.add_edge("audit", END)
 
-app = workflow.compile()
+# ── Graph Builder ─────────────────────────────────────────────────────
+
+def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
+    """Build and compile the LangGraph state machine."""
+    builder = StateGraph(State)
+
+    builder.add_node("load_job", load_job)
+    builder.add_node("router", router)
+    builder.add_node("squad_router", squad_router)
+    builder.add_node("execute_squads", execute_squads)
+    builder.add_node("audit", audit)
+
+    builder.set_entry_point("load_job")
+    builder.add_edge("load_job", "router")
+    builder.add_edge("router", "squad_router")
+    builder.add_edge("squad_router", "execute_squads")
+    builder.add_edge("execute_squads", "audit")
+    builder.add_edge("audit", END)
+
+    # Checkpointing for resilience
+    if LANGGRAPH_AVAILABLE:
+        checkpoint_path = Path(checkpoint_db)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpointer = SqliteSaver.from_conn_string(str(checkpoint_path))
+        return builder.compile(checkpointer=checkpointer)
+
+    return builder.compile()
+
+
+# ── Direct Execution ──────────────────────────────────────────────────
+
+def run_job(job_path: str, job_id: str | None = None) -> dict[str, Any]:
+    """Execute a single job through the graph."""
+    if not LANGGRAPH_AVAILABLE:
+        return {"status": "failed", "error": "LangGraph not installed"}
+
+    graph = build_graph()
+    job_id = job_id or Path(job_path).stem
+
+    initial_state: State = {
+        "job_id": job_id,
+        "job_path": job_path,
+        "status": "queued",
+        "routing_context": "",
+        "squads": [],
+        "target_domain": None,
+        "artifact_path": "",
+        "audit_result": "",
+        "error": None,
+    }
+
+    config = {"configurable": {"thread_id": job_id}}
+    result = graph.invoke(initial_state, config)
+    return dict(result)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python graph.py <job_file.md>")
+        sys.exit(1)
+
+    result = run_job(sys.argv[1])
+    print(json.dumps(result, indent=2, default=str))

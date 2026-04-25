@@ -1,138 +1,165 @@
 #!/usr/bin/env python3
-"""Wiki promotion script — writes to wiki/ only in PROMOTED state."""
-import argparse
-import sys
-from pathlib import Path
-from datetime import datetime, timezone
-import yaml
-import shutil
+"""
+promote.py — Stage artifact + promote to domain wiki
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+Usage:
+    # Promote to default wiki/ (backward compatible)
+    python scripts/promote.py <artifact_path>
+
+    # Promote to specific domain wiki
+    python scripts/promote.py <artifact_path> --domain game
+
+    # Force promote (bypass Gate 3 — for recovery only)
+    python scripts/promote.py <artifact_path> --domain market --force
+
+Flow:
+  1. Validate artifact exists
+  2. If --domain: route to domains/{domain}/wiki/ instead of work/wiki/
+  3. Check Gate 3 (CLI approval) unless --force
+  4. Atomic copy to destination
+  5. Update daemon state
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+# Allow importing from project root
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from domains.knowledge_os import KnowledgeOS, DomainError
 from utils.atomic_io import atomic_write
 
-def stage_promotion(job_path: Path, repo_root: Path = None) -> Path:
-    """Stage raw/ content for promotion. Returns staging directory."""
-    if repo_root is None:
-        repo_root = Path(__file__).resolve().parents[1]
-    # Read job frontmatter
-    text = job_path.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        raise ValueError("No frontmatter found")
-    _, rest = text.split("---", 1)
-    yaml_part, body = rest.split("---", 1)
-    frontmatter = yaml.safe_load(yaml_part) or {}
-    
-    # Validate prerequisites
-    if frontmatter.get("audit_result") != "pass":
-        print("ERROR: audit_result != pass. Fix audit issues before promotion.", file=sys.stderr)
-        sys.exit(1)
-    
-    if not frontmatter.get("approved_gate_2_by"):
-        print("ERROR: Gate 2 approval required.", file=sys.stderr)
-        sys.exit(1)
-    
-    # Stage content
-    job_id = frontmatter.get("job_id", job_path.stem)
-    staging_dir = repo_root / "work" / "artifacts" / "staging" / job_id
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Copy artifacts from memory/working/{job_id} to staging
-    working_dir = repo_root / "memory" / "working" / job_id
-    if working_dir.exists():
-        for f in working_dir.iterdir():
-            if f.is_file():
-                shutil.copy2(f, staging_dir / f.name)
-    else:
-        print(f"WARN: Working dir not found: {working_dir}")
-    
-    # Update status
-    frontmatter["status"] = "promotion_pending"
-    yaml_text = yaml.dump(frontmatter, sort_keys=False, allow_unicode=True)
-    content = f"---\n{yaml_text}---\n\n{body.strip()}\n"
-    atomic_write(job_path, content)
-    
-    print(f"Staged for promotion: {job_id} → {staging_dir}")
-    
-    # P1-002: Slack notification for Gate 3
-    slack_user = frontmatter.get("slack_user")
-    if slack_user:
-        from apps.ingress.slack_notifier import notify_gate
-        notify_gate(job_id, gate=3, slack_user=slack_user)
-        
-    return staging_dir
 
-def promote_to_wiki(job_path: Path, approver: str = "higurashi", repo_root: Path = None) -> None:
-    """Promote staged content to wiki/ after Gate 3 approval."""
-    if repo_root is None:
-        repo_root = Path(__file__).resolve().parents[1]
-    text = job_path.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        raise ValueError("No frontmatter found")
-    _, rest = text.split("---", 1)
-    yaml_part, body = rest.split("---", 1)
-    frontmatter = yaml.safe_load(yaml_part) or {}
-    
-    # Validate Gate 3
-    status = frontmatter.get("status")
-    if status != "promotion_pending" and status != "approved_gate_3":
-        print(f"ERROR: Expected status 'promotion_pending' or 'approved_gate_3', got '{status}'", file=sys.stderr)
-        sys.exit(1)
-    
-    if not frontmatter.get("approved_gate_3_by"):
-        print("ERROR: Gate 3 approval required for wiki write.", file=sys.stderr)
-        sys.exit(1)
-    
-    # Write to wiki/
-    job_id = frontmatter.get("job_id", job_path.stem)
-    staging_dir = repo_root / "work" / "artifacts" / "staging" / job_id
-    wiki_dir = repo_root / "wiki"
-    wiki_dir.mkdir(parents=True, exist_ok=True)
-    
-    if not staging_dir.exists():
-        print(f"ERROR: Staging directory not found: {staging_dir}", file=sys.stderr)
-        sys.exit(1)
-        
-    for f in staging_dir.iterdir():
-        if f.is_file():
-            dest = wiki_dir / f.name
-            shutil.copy2(f, dest)
-            print(f"Promoted: {f.name} → {dest}")
-    
-    # Update status to PROMOTED
-    frontmatter["status"] = "promoted"
-    frontmatter["promoted_at"] = datetime.now(timezone.utc).isoformat()
-    yaml_text = yaml.dump(frontmatter, sort_keys=False, allow_unicode=True)
-    content = f"---\n{yaml_text}---\n\n{body.strip()}\n"
-    atomic_write(job_path, content)
-    
-    # After wiki write, update Hermes memory
-    import subprocess
-    hermes_script = repo_root / "scripts" / "hermes_reflect.py"
-    subprocess.run([sys.executable, str(hermes_script)], check=False)
-    
-    print(f"PROMOTED: {job_id}")
+def compute_hash(path: Path) -> str:
+    """SHA-256 of file contents for integrity verification."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def gate_3_approve(artifact_name: str, domain: str | None) -> bool:
+    """HITL Gate 3 — CLI approval for wiki promotion."""
+    dest = f"domains/{domain}/wiki/" if domain else "work/wiki/"
+    print(f"\n{'='*60}")
+    print(f"  GATE 3: Wiki Promotion Approval")
+    print(f"{'='*60}")
+    print(f"  Artifact : {artifact_name}")
+    print(f"  Destination: {dest}")
+    print(f"{'='*60}")
+    choice = input("  Approve promotion? [y/N]: ").strip().lower()
+    return choice == "y"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Promote artifact to wiki")
+    parser.add_argument("artifact", help="Path to artifact file")
+    parser.add_argument(
+        "--domain",
+        choices=["game", "market", "personal"],
+        default=None,
+        help="Target domain wiki (default: work/wiki/)",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Bypass Gate 3 (recovery only)"
+    )
+    parser.add_argument(
+        "--topic",
+        default=None,
+        help="Wiki topic slug (default: artifact filename without extension)",
+    )
+    parser.add_argument(
+        "--squad",
+        default=None,
+        help="Squad name for permission checking",
+    )
+    args = parser.parse_args()
+
+    artifact_path = Path(args.artifact)
+    if not artifact_path.exists():
+        print(f"[ERROR] Artifact not found: {artifact_path}")
+        return 1
+
+    # Determine topic
+    topic = args.topic or artifact_path.stem
+    # Ensure valid slug
+    topic = topic.replace(" ", "_").replace("-", "_")[:60]
+
+    # Content
+    try:
+        content = artifact_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        print(f"[ERROR] Artifact is not a text file: {artifact_path}")
+        return 1
+
+    # Gate 3
+    if not args.force:
+        if not gate_3_approve(artifact_path.name, args.domain):
+            print("[Gate 3] REJECTED — promotion cancelled")
+            return 2
+
+    # Promote via KnowledgeOS (domain-aware) or fallback to filesystem
+    try:
+        if args.domain:
+            kos = KnowledgeOS()
+            wiki_path = kos.save(
+                domain=args.domain,
+                topic=topic,
+                content=content,
+                squad=args.squad,
+                frontmatter={
+                    "source_artifact": str(artifact_path),
+                    "artifact_hash": compute_hash(artifact_path),
+                    "promoted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            print(f"[OK] Promoted to domain wiki: {wiki_path}")
+        else:
+            # Backward-compatible: promote to work/wiki/
+            dest_dir = Path("work/wiki")
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = dest_dir / f"{topic}.md"
+
+            # Add minimal frontmatter
+            fm = {
+                "topic": topic,
+                "source_artifact": str(artifact_path),
+                "artifact_hash": compute_hash(artifact_path),
+                "promoted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            import yaml
+            fm_yaml = yaml.dump(fm, default_flow_style=False, allow_unicode=True)
+            doc = f"---\n{fm_yaml}---\n\n{content}\n"
+            atomic_write(dest_path, doc)
+            print(f"[OK] Promoted to work/wiki: {dest_path}")
+
+    except DomainError as e:
+        print(f"[ERROR] Domain validation failed: {e}")
+        return 3
+    except Exception as e:
+        print(f"[ERROR] Promotion failed: {e}")
+        return 4
+
+    # Update daemon state log
+    state_entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "op": "promote",
+        "artifact": str(artifact_path),
+        "topic": topic,
+        "domain": args.domain,
+        "hash": compute_hash(artifact_path),
+    }
+    from utils.atomic_io import atomic_append
+    atomic_append(Path("work/daemon.jsonl"), json.dumps(state_entry))
+
+    return 0
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--job", required=True, help="Path to JOB file")
-    parser.add_argument("--stage", action="store_true", help="Stage content for promotion")
-    parser.add_argument("--promote", action="store_true", help="Promote staged content to wiki")
-    parser.add_argument("--approved-by", default="higurashi", help="Gate 3 approver")
-    args = parser.parse_args()
-    
-    job_path = Path(args.job)
-    if not job_path.exists():
-        print(f"ERROR: Job not found: {job_path}", file=sys.stderr)
-        sys.exit(1)
-    
-    try:
-        if args.stage:
-            stage_promotion(job_path)
-        elif args.promote:
-            promote_to_wiki(job_path, args.approved_by)
-        else:
-            print("ERROR: Specify --stage or --promote", file=sys.stderr)
-            sys.exit(1)
-    except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(main())

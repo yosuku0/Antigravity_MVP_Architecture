@@ -22,3 +22,11 @@ wiki/
 # OS
 .DS_Store
 Thumbs.db
+
+# Vendored repositories
+vendor/
+
+# Node.js
+node_modules/
+package.json
+package-lock.json

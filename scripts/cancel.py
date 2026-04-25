@@ -1,65 +1,83 @@
 #!/usr/bin/env python3
-"""Cancel a job from any non-terminal state."""
+"""
+cancel.py — Cancel a running/stuck job
+
+Actions:
+  1. Remove lock file
+  2. Purge staged artifacts
+  3. Update daemon state to 'cancelled'
+"""
+
 import argparse
+import json
 import sys
+import time
 from pathlib import Path
-from datetime import datetime, timezone
-import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from utils.atomic_io import atomic_write
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-def cancel_job(job_path: Path, repo_root: Path = None) -> None:
-    """Cancel a job: remove lock, purge staged artifacts, set status to cancelled."""
-    if repo_root is None:
-        repo_root = Path(__file__).resolve().parents[1]
-    text = job_path.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        raise ValueError("No frontmatter found")
-    _, rest = text.split("---", 1)
-    yaml_part, body = rest.split("---", 1)
-    frontmatter = yaml.safe_load(yaml_part) or {}
-    
-    status = frontmatter.get("status")
-    if status in {"promoted", "failed", "cancelled"}:
-        print(f"Job is already terminal: {status}")
-        return
-    
-    job_id = frontmatter.get("job_id", job_path.stem)
-    
-    # Remove lock if exists
-    lock_path = repo_root / "work" / "locks" / f"{job_id}.lock"
+LOCK_DIR = Path("work/locks")
+STAGE_DIR = Path("work/staged")
+STATE_FILE = Path("work/daemon_state.json")
+LOG_FILE = Path("work/daemon.jsonl")
+
+
+def load_state() -> dict:
+    if not STATE_FILE.exists():
+        return {"jobs": {}}
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {"jobs": {}}
+
+
+def save_state(state: dict) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Cancel a job")
+    parser.add_argument("job_id", help="Job ID to cancel")
+    parser.add_argument("--purge", action="store_true", help="Also delete staged artifacts")
+    args = parser.parse_args()
+
+    # Remove lock
+    lock_path = LOCK_DIR / f"{args.job_id}.lock"
     if lock_path.exists():
         lock_path.unlink()
-        print(f"Lock removed for {job_id}")
-    
-    # Purge staged artifacts if applicable
-    staging_dir = repo_root / "work" / "artifacts" / "staging" / job_id
-    if staging_dir.exists():
-        import shutil
-        shutil.rmtree(staging_dir)
-        print(f"Staging purged for {job_id}")
-    
-    # Update status
-    frontmatter["status"] = "cancelled"
-    frontmatter["cancelled_at"] = datetime.now(timezone.utc).isoformat()
-    yaml_text = yaml.dump(frontmatter, sort_keys=False, allow_unicode=True)
-    content = f"---\n{yaml_text}---\n\n{body.strip()}\n"
-    atomic_write(job_path, content)
-    print(f"Cancelled: {job_id}")
+        print(f"[OK] Removed lock: {lock_path}")
+    else:
+        print(f"[INFO] No lock found for {args.job_id}")
+
+    # Update state
+    state = load_state()
+    if args.job_id in state.get("jobs", {}):
+        state["jobs"][args.job_id]["status"] = "cancelled"
+        save_state(state)
+        print(f"[OK] State updated to 'cancelled'")
+    else:
+        print(f"[WARN] Job {args.job_id} not found in state")
+
+    # Purge staged artifacts
+    if args.purge:
+        for artifact in STAGE_DIR.glob(f"{args.job_id}*"):
+            artifact.unlink()
+            print(f"[OK] Purged: {artifact}")
+
+    # Log
+    entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "type": "cancel",
+        "job_id": args.job_id,
+    }
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+    return 0
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--job", required=True, help="Path to JOB file")
-    args = parser.parse_args()
-    
-    job_path = Path(args.job)
-    if not job_path.exists():
-        print(f"ERROR: Job not found: {job_path}", file=sys.stderr)
-        sys.exit(1)
-    
-    try:
-        cancel_job(job_path)
-    except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(main())

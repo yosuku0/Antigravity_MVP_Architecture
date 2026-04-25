@@ -1,0 +1,6 @@
+name: market
+description: Market analysis — trends, competitor research, pricing, positioning
+allowed_squads:
+  - research_squad
+  - review_squad
+  - coding_squad
