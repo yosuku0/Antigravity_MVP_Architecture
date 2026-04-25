@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from domains.knowledge_os import KnowledgeOS, DomainError
 from utils.atomic_io import atomic_write
+from scripts.audit import audit_file
 
 
 def compute_hash(path: Path) -> str:
@@ -70,6 +71,11 @@ def main() -> int:
         "--force", action="store_true", help="Bypass Gate 3 (recovery only)"
     )
     parser.add_argument(
+        "--force-reason",
+        default=None,
+        help="Required when --force is used. Explain why promotion bypass is necessary.",
+    )
+    parser.add_argument(
         "--topic",
         default=None,
         help="Wiki topic slug (default: artifact filename without extension)",
@@ -80,6 +86,10 @@ def main() -> int:
         help="Squad name for permission checking",
     )
     args = parser.parse_args()
+
+    if args.force and not args.force_reason:
+        print("[ERROR] --force requires --force-reason")
+        return 6
 
     artifact_path = Path(args.artifact)
     if not artifact_path.exists():
@@ -97,6 +107,17 @@ def main() -> int:
     except UnicodeDecodeError:
         print(f"[ERROR] Artifact is not a text file: {artifact_path}")
         return 1
+
+    # Pre-promotion audit (mandatory)
+    audit_result = audit_file(artifact_path)
+    if not audit_result.get("passed", False):
+        if not args.force:
+            print("[ERROR] Artifact audit failed. Promotion blocked.")
+            print(json.dumps(audit_result, indent=2, ensure_ascii=False))
+            return 5
+        # --force used: allow bypass but log the failure
+        print("[WARN] Artifact audit failed but --force is set. Proceeding with promotion.")
+        print(json.dumps(audit_result, indent=2, ensure_ascii=False))
 
     # Gate 3
     if not args.force:
