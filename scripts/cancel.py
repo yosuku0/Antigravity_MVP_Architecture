@@ -9,8 +9,10 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from utils.atomic_io import atomic_write
 
-def cancel_job(job_path: Path) -> None:
+def cancel_job(job_path: Path, repo_root: Path = None) -> None:
     """Cancel a job: remove lock, purge staged artifacts, set status to cancelled."""
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parents[1]
     text = job_path.read_text(encoding="utf-8")
     if not text.startswith("---"):
         raise ValueError("No frontmatter found")
@@ -24,7 +26,6 @@ def cancel_job(job_path: Path) -> None:
         return
     
     job_id = frontmatter.get("job_id", job_path.stem)
-    repo_root = Path(__file__).resolve().parents[1]
     
     # Remove lock if exists
     lock_path = repo_root / "work" / "locks" / f"{job_id}.lock"

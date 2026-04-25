@@ -88,6 +88,7 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
             print(f"Error writing state cache: {e}")
             
         print(f"State rebuilt: {jobs_found} jobs, {locks_found} locks found.")
+        return self.daemon_state
 
     def update_job_status(self, job_id, new_status, reason=None):
         """Helper to update job status atomically."""

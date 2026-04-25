@@ -10,8 +10,10 @@ import shutil
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from utils.atomic_io import atomic_write
 
-def stage_promotion(job_path: Path) -> Path:
+def stage_promotion(job_path: Path, repo_root: Path = None) -> Path:
     """Stage raw/ content for promotion. Returns staging directory."""
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parents[1]
     # Read job frontmatter
     text = job_path.read_text(encoding="utf-8")
     if not text.startswith("---"):
@@ -31,7 +33,6 @@ def stage_promotion(job_path: Path) -> Path:
     
     # Stage content
     job_id = frontmatter.get("job_id", job_path.stem)
-    repo_root = Path(__file__).resolve().parents[1]
     staging_dir = repo_root / "work" / "artifacts" / "staging" / job_id
     staging_dir.mkdir(parents=True, exist_ok=True)
     
@@ -51,8 +52,10 @@ def stage_promotion(job_path: Path) -> Path:
     print(f"Staged for promotion: {job_id} → {staging_dir}")
     return staging_dir
 
-def promote_to_wiki(job_path: Path, approver: str = "higurashi") -> None:
+def promote_to_wiki(job_path: Path, approver: str = "higurashi", repo_root: Path = None) -> None:
     """Promote staged content to wiki/ after Gate 3 approval."""
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parents[1]
     text = job_path.read_text(encoding="utf-8")
     if not text.startswith("---"):
         raise ValueError("No frontmatter found")
@@ -72,7 +75,6 @@ def promote_to_wiki(job_path: Path, approver: str = "higurashi") -> None:
     
     # Write to wiki/
     job_id = frontmatter.get("job_id", job_path.stem)
-    repo_root = Path(__file__).resolve().parents[1]
     staging_dir = repo_root / "work" / "artifacts" / "staging" / job_id
     wiki_dir = repo_root / "wiki"
     wiki_dir.mkdir(parents=True, exist_ok=True)
