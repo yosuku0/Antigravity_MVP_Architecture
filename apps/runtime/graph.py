@@ -109,25 +109,58 @@ def squad_router(state: State) -> State:
     """Determine which squads to run based on domain permissions.
 
     Reads domains/{domain}/.domain to filter squads by allowed_squads.
-    Falls back to all 3 squads if no domain specified or domain not found.
+    Fail-closed: returns failed status if domain is missing or invalid.
     """
     domain = state.get("target_domain")
+    
+    # No domain specified → fail immediately
     if not domain:
-        # No domain — run all squads (backward compatible)
-        return {**state, "squads": ["coding_squad", "research_squad", "review_squad"], "status": "executing"}
+        return {
+            **state,
+            "status": "failed",
+            "error": "Domain not specified in job frontmatter",
+        }
 
     try:
         kos = KnowledgeOS()
         meta = kos._domains.get(domain)
-        if meta and meta.allowed_squads:
-            allowed = [s for s in meta.allowed_squads if s in ("coding_squad", "research_squad", "review_squad")]
-            if allowed:
-                return {**state, "squads": allowed, "status": "executing"}
-    except Exception:
-        pass
+    except Exception as e:
+        return {
+            **state,
+            "status": "failed",
+            "error": f"Domain routing failed for {domain}: {e}",
+        }
 
-    # Fallback
-    return {**state, "squads": ["coding_squad", "research_squad", "review_squad"], "status": "executing"}
+    # Unknown domain or missing .domain file → fail immediately
+    if meta is None:
+        return {
+            **state,
+            "status": "failed",
+            "error": f"Unknown domain or missing domain metadata: {domain}",
+        }
+
+    # No allowed squads configured → fail immediately
+    if not meta.allowed_squads:
+        return {
+            **state,
+            "status": "failed",
+            "error": f"No valid squads allowed for domain: {domain}",
+        }
+
+    ALL_SQUADS = ("coding_squad", "research_squad", "review_squad")
+    # Normalize squad names in case they are missing the _squad suffix
+    normalized = [f"{s}_squad" if not s.endswith("_squad") else s for s in meta.allowed_squads]
+    allowed = [s for s in normalized if s in ALL_SQUADS]
+    
+    # Intersection is empty → fail immediately
+    if not allowed:
+        return {
+            **state,
+            "status": "failed",
+            "error": f"No valid squads allowed for domain: {domain}",
+        }
+
+    return {**state, "squads": allowed, "status": "executing"}
 
 
 def execute_squads(state: State) -> State:

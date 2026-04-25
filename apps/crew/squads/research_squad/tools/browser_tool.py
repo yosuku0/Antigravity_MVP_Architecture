@@ -29,15 +29,16 @@ class WebResearchTool(BaseTool):
             return "Error: NVIDIA_API_KEY required for high-quality web research."
 
         browser = Browser()
-        agent = Agent(
-            task=task,
-            llm=llm,
-            browser=browser
-        )
-        
-        result = await agent.run()
-        # Extract the final result from agent history or result
-        return str(result)
+        try:
+            agent = Agent(
+                task=task,
+                llm=llm,
+                browser=browser
+            )
+            result = await agent.run()
+            return str(result)
+        finally:
+            await browser.close()
 
 if __name__ == "__main__":
     # Quick test
