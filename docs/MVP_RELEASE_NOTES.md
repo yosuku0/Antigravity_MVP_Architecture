@@ -22,15 +22,20 @@ The NIM-Kinetic Meta-Agent MVP is a robust, production-ready orchestration syste
 - **Validation**: Pydantic v2, PyYAML
 - **Execution**: Python 3.12
 
-## Known Limitations (MVP 1.0.0)
+## Known Limitations (MVP 1.0.0 + P1-004)
 
 ### NIM Integration via CrewAI
-- **Status:** Partially functional
-- **Direct NIM API calls (C-002):** Working ✅
-- **NIM through CrewAI execution path:** Returns 401 via LiteLLM
-- **Impact:** Complexity scorer routes to NIM, but execution falls back to Ollama
-- **Workaround:** Ollama is the stable execution driver
-- **Resolution target:** P1 (Phase 1) — migrate to `langchain-nvidia-ai-endpoints` `ChatNVIDIA`
+- **Status:** FIXED in P1-004 ✅
+- **Approach:** `crewai.LLM` with `openai/` prefix + `base_url='https://integrate.api.nvidia.com/v1'`
+- **Verified:** JOB-NIM-001 executed successfully with NIM, artifact generated
+- **Fallback:** Ollama remains available for all contexts
+
+### Remaining Deferred Capabilities (still P1/P2)
+- Slack ingress: ✅ ADDED in P1-001
+- Qdrant RAG: Still deferred
+- Auto checkpoint resume: Still deferred
+- Data Flywheel: Still deferred
+- Self-hosted NIM: Still deferred
 
 ### Verification Evidence
 
