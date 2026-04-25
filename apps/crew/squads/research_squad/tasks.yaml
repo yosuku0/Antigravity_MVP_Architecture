@@ -10,5 +10,7 @@ research_task:
 synthesize_task:
   description: |
     Synthesize the research notes at {artifact_path} into a concise summary.
+    
+    Save your executive summary to: {output_path}
   expected_output: "Executive summary of findings"
   agent: analyst

@@ -20,9 +20,9 @@ def test_daemon_claims_approved_job(tmp_repo, create_job, monkeypatch):
     )
     handler.process_job(job_path)
     
-    # 3. Assert lock created
+    # 3. Assert lock is NOT present (released)
     lock_path = tmp_repo / "work" / "locks" / "JOB-001.lock"
-    assert lock_path.exists()
+    assert not lock_path.exists()
     
     # 4. Assert status updated in job file
     content = job_path.read_text(encoding="utf-8")
