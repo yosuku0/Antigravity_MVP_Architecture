@@ -55,24 +55,44 @@ def rebuild_state() -> dict:
     return state
 
 
+def reconcile_state(state: dict) -> dict:
+    """Merge filesystem jobs into daemon state without resetting existing statuses."""
+    state.setdefault("jobs", {})
+
+    # Remove jobs whose files disappeared
+    state["jobs"] = {
+        job_id: info
+        for job_id, info in state["jobs"].items()
+        if Path(info.get("path", "")).exists()
+    }
+
+    # Add new job files as queued, but preserve existing job statuses
+    if JOBS_DIR.exists():
+        for path in sorted(JOBS_DIR.glob("*.md")):
+            job_id = path.stem
+            if job_id not in state["jobs"]:
+                state["jobs"][job_id] = {
+                    "status": "queued",
+                    "path": str(path),
+                    "created": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime)
+                    ),
+                }
+
+    save_state(state)
+    return state
+
+
 def load_state() -> dict:
-    """Load or rebuild daemon state."""
+    """Load or reconcile daemon state."""
     if STATE_FILE.exists():
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 state = json.load(f)
-            # Validate: check all referenced jobs still exist
-            valid_jobs = {
-                k: v for k, v in state.get("jobs", {}).items()
-                if Path(v.get("path", "")).exists()
-            }
-            if len(valid_jobs) != len(state.get("jobs", {})):
-                state["jobs"] = valid_jobs
-                save_state(state)
-            return state
+            return reconcile_state(state)
         except (json.JSONDecodeError, KeyError):
             pass
-    return rebuild_state()
+    return reconcile_state({"jobs": {}})
 
 
 def save_state(state: dict) -> None:
@@ -224,7 +244,7 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
     # Rebuild state on startup
-    state = rebuild_state()
+    state = load_state()
     save_state(state)
     log_event("startup", "daemon", f"{len(state['jobs'])} jobs queued")
 
