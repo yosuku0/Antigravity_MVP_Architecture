@@ -152,6 +152,9 @@ class WikiDaemonHandler(PatternMatchingEventHandler):
             return
             
         status = frontmatter.get("status")
+        if status in ["promoted", "failed", "cancelled"]:
+            return
+            
         if status != "approved_gate_1":
             return
 
