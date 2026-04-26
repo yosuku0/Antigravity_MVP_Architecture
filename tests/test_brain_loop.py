@@ -6,7 +6,10 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from apps.runtime.graph import State, brain_review, execute_squads
+from apps.runtime.state import State
+from apps.runtime.graph import brain_review
+from apps.runtime.nodes.plan_executor import plan_executor
+from apps.runtime.nodes.run_executor import run_executor
 
 
 class TestBrainLoop:
@@ -94,15 +97,22 @@ class TestBrainLoop:
             "routing_context": "",
             "squads": [],
             "target_domain": "game",
+            "domain": "game",
             "audit_result": "",
             "error": None,
             "review_feedback": "Fix the typo in section 2",
             "review_count": 1,
             "artifact_path": None,
+            "planned_objective": None,
         }
         
-        # execute_squads should inject feedback into objective
-        result = execute_squads(state)
-        assert result["review_feedback"] is None  # Cleared after use
-        assert result["artifact_path"] is not None
-        assert result["status"] == "reviewing"
+        # 1. plan_executor should inject feedback into planned_objective
+        plan_state = plan_executor(state)
+        assert plan_state["review_feedback"] is None  # Cleared after use
+        assert "Fix the typo in section 2" in plan_state["planned_objective"]
+        assert plan_state["status"] == "executing"
+        
+        # 2. run_executor should use planned_objective
+        run_state = run_executor(plan_state)
+        assert run_state["artifact_path"] is not None
+        assert run_state["status"] == "reviewing"

@@ -55,23 +55,12 @@ CREWAI_AVAILABLE = find_spec("crewai") is not None
 # Terminal statuses for graph completion
 TERMINAL_STATUSES = {"done", "failed", "audit_failed", "promoted", "cancelled"}
 
+from apps.runtime.state import State
+from apps.runtime.nodes.plan_executor import plan_executor
+from apps.runtime.nodes.run_executor import run_executor
+
 
 # ── State Schema ──────────────────────────────────────────────────────
-
-class State(TypedDict):
-    """LangGraph state shared across nodes."""
-    job_id: str
-    job_path: Path
-    status: str  # queued | routing | executing | reviewing | auditing | done | failed
-    routing_context: str
-    squads: list[str]
-    target_domain: str | None  # game | market | personal
-    artifact_path: Path | None
-    audit_result: str
-    review_feedback: str | None
-    review_count: int
-    error: str | None
-
 
 # ── Node Functions ────────────────────────────────────────────────────
 
@@ -166,102 +155,6 @@ def squad_router(state: State) -> State:
         }
 
     return {**state, "squads": allowed, "status": "executing"}
-
-
-def execute_squads(state: State) -> State:
-    """Execute squads sequentially with feedback injection."""
-    squads = state.get("squads", [])
-    domain = state.get("target_domain")
-    job_path = state.get("job_path")
-    review_feedback = state.get("review_feedback")
-    
-    # Read job content
-    if job_path and job_path.exists():
-        content = job_path.read_text(encoding="utf-8")
-    else:
-        content = state.get("routing_context", "")
-    
-    # Inject review feedback if present (loop iteration)
-    objective = content
-    if review_feedback:
-        objective = f"""{content}
-
-=== PREVIOUS REVIEW FEEDBACK ===
-The following issues were identified in the previous review. Address all of them:
-{review_feedback}
-=== END FEEDBACK ===
-"""
-    
-    results = []
-    for squad_name in squads:
-        try:
-            result = _execute_single_squad(squad_name, objective, domain)
-            results.append(f"{squad_name}: {result}")
-        except Exception as e:
-            results.append(f"{squad_name}: ERROR — {e}")
-
-    # Write artifact to staging
-    artifact_path = Path(f"work/artifacts/staging/{state['job_id']}.md")
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_content = "\n\n".join(results)
-    artifact_path.write_text(artifact_content, encoding="utf-8")
-    
-    return {
-        **state,
-        "status": "reviewing",
-        "artifact_path": artifact_path,
-        "review_feedback": None,  # Clear feedback for next review
-    }
-
-
-def _execute_single_squad(squad_name: str, objective: str, domain: str | None) -> str:
-    """Execute a single squad with optional domain context."""
-    squad_dir = Path(__file__).resolve().parent.parent / "crew" / "squads" / squad_name
-
-    # Inject domain context into objective
-    if domain:
-        objective = f"[Domain: {domain}] {objective}"
-
-    # Check if squad has a crew.py config
-    crew_py = squad_dir / "crew.py"
-    if crew_py.exists():
-        return _execute_squad_from_config(crew_py, objective, squad_name, domain)
-
-    # Fallback: return placeholder (squad not yet configured)
-    return f"Squad {squad_name} executed with objective: {objective[:100]}..."
-
-
-def _execute_squad_from_config(
-    crew_py: Path, objective: str, squad_name: str, domain: str | None
-) -> str:
-    """Execute a squad defined in crew.py."""
-    if not CREWAI_AVAILABLE:
-        return f"[CrewAI not available — would execute {crew_py}]"
-
-    # Dynamic import of squad config
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("crew_config", crew_py)
-    if spec is None or spec.loader is None:
-        return "[Failed to load crew config]"
-
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    # Get LLM from unified router
-    try:
-        from apps.llm_router.router import UnifiedRouter
-        router = UnifiedRouter()
-        llm = router.get_llm("nim_cheap")
-    except Exception:
-        llm = None  # Will use CrewAI default
-
-    # Build agents and tasks from config
-    if hasattr(mod, "create_crew"):
-        crew = mod.create_crew(objective=objective, llm=llm, domain=domain)
-        return str(crew.kickoff())
-
-    return f"[No create_crew() found in {crew_py}]"
-
 
 def brain_review(state: State) -> State:
     """Review artifact using review_squad."""
@@ -392,40 +285,45 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
     builder = StateGraph(State)
 
     builder.add_node("load_job", load_job)
-    builder.add_node("router", router)
     builder.add_node("squad_router", squad_router)
-    builder.add_node("execute_squads", execute_squads)
+    builder.add_node("plan_executor", plan_executor)
+    builder.add_node("run_executor", run_executor)
     builder.add_node("brain_review", brain_review)
-    builder.add_node("audit", audit)
+    builder.add_node("audit", audit_node)
+    builder.add_node("promote", promote_to_wiki)
 
+    # Add Edges
     builder.set_entry_point("load_job")
-    builder.add_edge("load_job", "router")
-    builder.add_edge("router", "squad_router")
-    builder.add_edge("squad_router", "execute_squads")
-    
-    # New edge: execute_squads -> brain_review
-    builder.add_edge("execute_squads", "brain_review")
+    builder.add_edge("load_job", "squad_router")
 
-    # Conditional logic for brain_review
+    # Squad Router condition
+    builder.add_conditional_edges(
+        "squad_router",
+        lambda state: "plan_executor" if state.get("status") == "executing" else "failed",
+        {"plan_executor": "plan_executor", "failed": END}
+    )
+
+    # Core Execution Loop
+    builder.add_edge("plan_executor", "run_executor")
+    builder.add_edge("run_executor", "brain_review")
+
+    # Review Loop (L2)
     builder.add_conditional_edges(
         "brain_review",
         lambda state: (
             "audit" if state.get("status") == "auditing"
-            else "execute_squads" if state.get("status") == "reviewing" and state.get("review_count", 0) < 3
+            else "plan_executor" if state.get("status") == "reviewing" and state.get("review_count", 0) < 3
             else "failed"
         ),
         {
             "audit": "audit",
-            "execute_squads": "execute_squads",
+            "plan_executor": "plan_executor",
             "failed": END,
         }
     )
 
-    # Audit to END if terminal
-    builder.add_conditional_edges(
-        "audit",
-        lambda state: END if state.get("status") in TERMINAL_STATUSES else "audit"
-    )
+    builder.add_edge("audit", "promote")
+    builder.add_edge("promote", END)
 
     # Checkpointing for resilience
     if LANGGRAPH_AVAILABLE:
@@ -459,6 +357,7 @@ def run_job(job_path: str, job_id: str | None = None) -> dict[str, Any]:
         "review_feedback": None,
         "review_count": 0,
         "error": None,
+        "planned_objective": None,
     }
 
     config = {"configurable": {"thread_id": job_id}}
