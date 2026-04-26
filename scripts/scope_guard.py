@@ -75,8 +75,10 @@ def main() -> int:
 
     for path in root.rglob("*.py"):
         rel_posix = path.relative_to(root).as_posix()
-        if "vendor/" in rel_posix or "memory/" in rel_posix or "work/sandbox_venv/" in rel_posix:
-            continue  # Skip vendored code, memory artifacts, and sandbox venv
+        # Skip vendored code, memory artifacts, execution work dir, and local venvs
+        skip_dirs = ["vendor/", "memory/", "work/", "venv/", ".venv/"]
+        if any(sd in rel_posix for sd in skip_dirs):
+            continue
         all_findings.extend(scan_file(path, root))
 
     if all_findings:

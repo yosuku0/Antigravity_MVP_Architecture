@@ -8,6 +8,25 @@ from utils.safe_subprocess import run_in_venv, ensure_venv, get_venv_python
 
 VENV_DIR = Path("work/sandbox_venv")
 
+def _check_tier2_readiness() -> dict:
+    """Tier 2 が実行可能か事前チェック"""
+    # 1. Python インタープリタが存在するか
+    python_bin = get_venv_python(VENV_DIR)
+    if not python_bin.exists():
+        return {"ready": False, "reason": "venv Python not found"}
+    
+    # 2. pip が動作するか
+    try:
+        # venv のインタープリタで直接実行してチェック
+        res = run_in_venv(python_bin, "import pip; print('pip ok')", timeout=10)
+        if not res["success"]:
+            return {"ready": False, "reason": f"pip broken: {res['stderr']}"}
+    except Exception as e:
+        return {"ready": False, "reason": f"pip check failed: {e}"}
+    
+    return {"ready": True}
+
+
 def execute_code_safely(code: str, timeout: int = 60) -> dict:
     """Execute Python code with 3-tier fallback.
     
@@ -38,12 +57,19 @@ def execute_code_safely(code: str, timeout: int = 60) -> dict:
     # Tier 2: Local venv
     try:
         ensure_venv(VENV_DIR, Path("requirements.txt"))
-        python_path = get_venv_python(VENV_DIR)
-        res = run_in_venv(python_path, code, timeout=timeout)
-        return {
-            "tier": 2,
-            **res
-        }
+        
+        # Readiness check before actual execution
+        readiness = _check_tier2_readiness()
+        if not readiness["ready"]:
+            print(f"[sandbox] Tier 2 readiness check failed: {readiness['reason']}")
+            # Fall through to Tier 3
+        else:
+            python_path = get_venv_python(VENV_DIR)
+            res = run_in_venv(python_path, code, timeout=timeout)
+            return {
+                "tier": 2,
+                **res
+            }
     except Exception as e:
         print(f"[sandbox] Tier 2 (local) failed: {e}")
 

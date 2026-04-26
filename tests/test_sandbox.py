@@ -8,20 +8,22 @@ def test_tier_2_local_execution():
     """Verify that local execution works when e2b is disabled."""
     with patch.dict("os.environ", {"E2B_API_KEY": ""}):
         with patch("apps.runtime.sandbox_executor.ensure_venv") as mock_ensure:
-            with patch("apps.runtime.sandbox_executor.run_in_venv") as mock_run:
-                mock_run.return_value = {
-                    "stdout": "hello from sandbox",
-                    "stderr": "",
-                    "exit_code": 0,
-                    "success": True
-                }
-                code = "print('hello from sandbox')"
-                result = execute_code_safely(code)
-                # Tier 2 should be used if e2b is disabled
-                assert result["tier"] == 2
-                assert "hello from sandbox" in result["stdout"]
-                assert result["success"] is True
-                mock_ensure.assert_called_once()
+            with patch("apps.runtime.sandbox_executor._check_tier2_readiness") as mock_ready:
+                mock_ready.return_value = {"ready": True}
+                with patch("apps.runtime.sandbox_executor.run_in_venv") as mock_run:
+                    mock_run.return_value = {
+                        "stdout": "hello from sandbox",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "success": True
+                    }
+                    code = "print('hello from sandbox')"
+                    result = execute_code_safely(code)
+                    # Tier 2 should be used if e2b is disabled
+                    assert result["tier"] == 2
+                    assert "hello from sandbox" in result["stdout"]
+                    assert result["success"] is True
+                    mock_ensure.assert_called_once()
 
 def test_tier_1_e2b_mocked():
     """Verify that e2b is prioritized when API key is present."""
