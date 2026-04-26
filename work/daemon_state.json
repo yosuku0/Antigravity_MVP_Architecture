@@ -26,14 +26,46 @@
       "created": "2026-04-24T17:57:14Z"
     },
     "JOB-NIM-001": {
-      "status": "audit_passed",
+      "status": "failed",
       "path": "work\\jobs\\JOB-NIM-001.md",
-      "created": "2026-04-24T17:57:14Z"
+      "created": "2026-04-24T17:57:14Z",
+      "result": {
+        "job_id": "JOB-NIM-001",
+        "job_path": "work\\jobs\\JOB-NIM-001.md",
+        "domain": "",
+        "target_domain": "",
+        "squads": [],
+        "status": "failed",
+        "audit_result": "pending",
+        "error": "Artifact missing at promote",
+        "review_feedback": null,
+        "review_count": 0,
+        "artifact_path": null,
+        "planned_objective": null,
+        "routing_context": "\n\n\n",
+        "parallel": false
+      }
     },
     "JOB-OLL-001": {
-      "status": "audit_passed",
+      "status": "failed",
       "path": "work\\jobs\\JOB-OLL-001.md",
-      "created": "2026-04-24T17:57:14Z"
+      "created": "2026-04-24T17:57:14Z",
+      "result": {
+        "job_id": "JOB-OLL-001",
+        "job_path": "work\\jobs\\JOB-OLL-001.md",
+        "domain": "",
+        "target_domain": "",
+        "squads": [],
+        "status": "failed",
+        "audit_result": "pending",
+        "error": "Artifact missing at promote",
+        "review_feedback": null,
+        "review_count": 0,
+        "artifact_path": null,
+        "planned_objective": null,
+        "routing_context": "\n\n\n",
+        "parallel": false
+      }
     },
     "JOB-T014-001": {
       "status": "failed",
@@ -49,6 +81,81 @@
       "status": "created",
       "path": "work\\jobs\\sample_job.md",
       "created": "2026-04-26T00:51:20Z"
+    },
+    "parallel_test_1": {
+      "status": "failed",
+      "path": "work\\jobs\\parallel_test_1.md",
+      "created": "2026-04-26T10:54:40Z",
+      "result": {
+        "job_id": "parallel_test_1",
+        "job_path": "work\\jobs\\parallel_test_1.md",
+        "domain": "game",
+        "target_domain": "game",
+        "squads": [
+          "coding_squad",
+          "review_squad",
+          "research_squad"
+        ],
+        "status": "failed",
+        "audit_result": "pending",
+        "error": "Artifact missing after execution",
+        "review_feedback": null,
+        "review_count": 1,
+        "artifact_path": null,
+        "planned_objective": "---\nstatus: approved_gate_1\ndomain: game\n---\n# Parallel Test Job 1\nThis job tests the thread-pool dispatcher.\n```python\nimport time\nprint(\"Job 1 started\")\ntime.sleep(10)\nprint(\"Job 1 finished\")\n```\n",
+        "routing_context": "\n# Parallel Test Job 1\nThis job tests the thread-pool dispatcher.\n```python\nimport time\nprint(\"Job 1 started\")\ntime.sleep(10)\nprint(\"Job 1 finished\")\n```\n",
+        "parallel": false
+      }
+    },
+    "parallel_test_2": {
+      "status": "failed",
+      "path": "work\\jobs\\parallel_test_2.md",
+      "created": "2026-04-26T10:54:47Z",
+      "result": {
+        "job_id": "parallel_test_2",
+        "job_path": "work\\jobs\\parallel_test_2.md",
+        "domain": "game",
+        "target_domain": "game",
+        "squads": [
+          "coding_squad",
+          "review_squad",
+          "research_squad"
+        ],
+        "status": "failed",
+        "audit_result": "pending",
+        "error": "Artifact missing after execution",
+        "review_feedback": null,
+        "review_count": 1,
+        "artifact_path": null,
+        "planned_objective": "---\nstatus: approved_gate_1\ndomain: game\n---\n# Parallel Test Job 2\nThis job tests the thread-pool dispatcher.\n```python\nimport time\nprint(\"Job 2 started\")\ntime.sleep(10)\nprint(\"Job 2 finished\")\n```\n",
+        "routing_context": "\n# Parallel Test Job 2\nThis job tests the thread-pool dispatcher.\n```python\nimport time\nprint(\"Job 2 started\")\ntime.sleep(10)\nprint(\"Job 2 finished\")\n```\n",
+        "parallel": false
+      }
+    },
+    "parallel_test_3": {
+      "status": "failed",
+      "path": "work\\jobs\\parallel_test_3.md",
+      "created": "2026-04-26T10:54:54Z",
+      "result": {
+        "job_id": "parallel_test_3",
+        "job_path": "work\\jobs\\parallel_test_3.md",
+        "domain": "game",
+        "target_domain": "game",
+        "squads": [
+          "coding_squad",
+          "review_squad",
+          "research_squad"
+        ],
+        "status": "failed",
+        "audit_result": "pending",
+        "error": "Artifact missing after execution",
+        "review_feedback": null,
+        "review_count": 1,
+        "artifact_path": null,
+        "planned_objective": "---\nstatus: approved_gate_1\ndomain: game\n---\n# Parallel Test Job 3\nThis job tests the thread-pool dispatcher.\n```python\nimport time\nprint(\"Job 3 started\")\ntime.sleep(10)\nprint(\"Job 3 finished\")\n```\n",
+        "routing_context": "\n# Parallel Test Job 3\nThis job tests the thread-pool dispatcher.\n```python\nimport time\nprint(\"Job 3 started\")\ntime.sleep(10)\nprint(\"Job 3 finished\")\n```\n",
+        "parallel": false
+      }
     }
   }
 }

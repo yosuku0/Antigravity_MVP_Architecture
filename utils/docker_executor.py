@@ -66,9 +66,15 @@ def run_in_docker(code: str, timeout: int = 60, job_id: str = "unknown") -> dict
     host_artifacts = Path("work/artifacts").resolve()
     host_artifacts.mkdir(parents=True, exist_ok=True)
     
+    # Resource limits from environment
+    cpu_limit = os.environ.get("DOCKER_CPU_LIMIT", "1.0")
+    mem_limit = os.environ.get("DOCKER_MEM_LIMIT", "512m")
+
     # Build docker run command
     docker_cmd = [
         "docker", "run", "--rm",
+        "--cpus", cpu_limit,
+        "--memory", mem_limit,
         *get_docker_user_args(),
         "-v", f"{host_artifacts}:/mnt/artifacts",
         "-w", "/mnt/artifacts",

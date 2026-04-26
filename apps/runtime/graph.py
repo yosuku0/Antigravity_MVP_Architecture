@@ -411,6 +411,11 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
                 checkpoint_path = Path(checkpoint_db)
                 checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
                 checkpointer = Checkpointer.from_conn_string(str(checkpoint_path))
+                # Enable WAL mode for parallel HITL performance
+                checkpointer.conn.execute("PRAGMA journal_mode=WAL;")
+                checkpointer.conn.execute("PRAGMA synchronous=NORMAL;")
+                # Set connection timeout
+                checkpointer.conn.execute("PRAGMA busy_timeout = 30000;")
             else:
                 # MemorySaver or similar
                 checkpointer = Checkpointer()

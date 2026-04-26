@@ -12,6 +12,8 @@ Responsibilities:
 import sys
 import os
 import time
+import threading
+import concurrent.futures
 from pathlib import Path
 
 # Add project root to path BEFORE local imports
@@ -137,6 +139,56 @@ def save_state(state: dict) -> None:
     atomic_write(STATE_FILE, json.dumps(state, indent=2, ensure_ascii=False, cls=PathEncoder))
 
 
+# Global lock for state.json access
+STATE_LOCK = threading.Lock()
+
+def update_job_status_safe(job_id: str, status: str, result: dict = None, error: str = None) -> None:
+    """Thread-safe update of job status in daemon state."""
+    with STATE_LOCK:
+        state = load_state()
+        if job_id in state["jobs"]:
+            state["jobs"][job_id]["status"] = status
+            if result:
+                state["jobs"][job_id]["result"] = result
+            if error:
+                state["jobs"][job_id]["error"] = error
+            save_state(state)
+            logger.debug(f"Status updated to {status}", extra={"job_id": job_id})
+
+
+def worker_task(job_id: str, job_path: str) -> None:
+    """
+    Worker task to execute a job in parallel.
+    Ensures lock release and thread-safe status updates.
+    """
+    try:
+        logger.info(f"Worker started execution", extra={"job_id": job_id})
+        log_event("start", job_id)
+        
+        # 1. Update status to running
+        update_job_status_safe(job_id, "running")
+
+        # 2. Execute job
+        result = execute_job(job_id, job_path)
+
+        # 3. Finalize status
+        final_status = result.get("status", "unknown")
+        update_job_status_safe(job_id, final_status, result=result)
+
+        detail = result.get("audit_result", "") or result.get("error", "")
+        log_event("complete", job_id, detail)
+        logger.info(f"Worker finished with status: {final_status}", extra={"job_id": job_id})
+
+    except Exception as e:
+        logger.error(f"Worker crashed: {e}", extra={"job_id": job_id}, exc_info=True)
+        update_job_status_safe(job_id, "failed", error=str(e))
+        log_event("error", job_id, str(e))
+    finally:
+        # Always release the lock
+        release_lock(job_id)
+        logger.debug(f"Lock released", extra={"job_id": job_id})
+
+
 def try_lock(job_id: str) -> bool:
     """Try to acquire atomic lock for a job.
 
@@ -239,8 +291,11 @@ def execute_job(job_id: str, job_path: str) -> dict:
         return {"status": "failed", "error": str(e)}
 
 
-def process_jobs() -> int:
-    """Process all queued jobs. Returns number processed."""
+def process_jobs_parallel(executor: concurrent.futures.ThreadPoolExecutor) -> int:
+    """
+    Dispatcher: Process all queued jobs by submitting them to a thread pool.
+    Returns number of jobs dispatched.
+    """
     state = load_state()
     count = 0
     RUNNABLE_STATUSES = {"approved_gate_1", "approved_gate_3"}
@@ -250,13 +305,11 @@ def process_jobs() -> int:
         fm = read_job_frontmatter(job_path)
         job_status = fm.get("status", job_info.get("status", "created"))
 
-        if job_status in TERMINAL_STATUSES:
+        if job_status in TERMINAL_STATUSES or job_status == "running":
             continue
         
         if job_status not in RUNNABLE_STATUSES:
-            log_event("skip", job_id, f"waiting for Gate 1; status={job_status}")
-            state["jobs"][job_id]["status"] = job_status
-            save_state(state)
+            # We don't log skip anymore to keep dispatcher logs clean
             continue
 
         # Try to acquire lock
@@ -267,29 +320,10 @@ def process_jobs() -> int:
             else:
                 continue
 
-        try:
-            log_event("start", job_id)
-            state["jobs"][job_id]["status"] = "running"
-            save_state(state)
-
-            result = execute_job(job_id, job_info["path"])
-
-            state["jobs"][job_id]["status"] = result.get("status", "unknown")
-            state["jobs"][job_id]["result"] = result
-            save_state(state)
-
-            detail = result.get("audit_result", "") or result.get("error", "")
-            log_event("complete", job_id, detail)
-            count += 1
-
-        except Exception as e:
-            state["jobs"][job_id]["status"] = "failed"
-            state["jobs"][job_id]["error"] = str(e)
-            save_state(state)
-            log_event("error", job_id, str(e))
-
-        finally:
-            release_lock(job_id)
+        # Dispatch to executor
+        logger.info(f"Dispatching job to worker pool", extra={"job_id": job_id})
+        executor.submit(worker_task, job_id, str(job_path))
+        count += 1
 
     return count
 
@@ -315,9 +349,15 @@ def main() -> None:
     save_state(state)
     log_event("startup", "daemon", f"{len(state['jobs'])} jobs queued")
 
+    # Parallel workers configuration
+    MAX_WORKERS = int(os.environ.get("MAX_WORKERS", 4))
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    logger.info(f"Initialized thread pool with {MAX_WORKERS} workers")
+
     if args.once:
-        processed = process_jobs()
-        log_event("shutdown", "daemon", f"Processed {processed} jobs")
+        processed = process_jobs_parallel(executor)
+        log_event("shutdown", "daemon", f"Dispatched {processed} jobs")
+        executor.shutdown(wait=True)
         return
 
     # Initialize Slack Adapter
@@ -339,13 +379,15 @@ def main() -> None:
                     art_path = Path("work/artifacts/staging") / f"{jid}.md"
                     slack_adapter.send_audit_notification(jid, str(art_path))
             
-            processed = process_jobs()
+            processed = process_jobs_parallel(executor)
             if processed > 0:
-                logger.info(f"  Processed {processed} jobs")
+                logger.info(f"  Dispatched {processed} jobs")
             time.sleep(args.interval)
     except KeyboardInterrupt:
         if slack_handler:
             slack_handler.close()
+        logger.info("Shutting down executor...")
+        executor.shutdown(wait=True)
         log_event("shutdown", "daemon", "SIGINT received")
         print("\nDaemon stopped")
 
