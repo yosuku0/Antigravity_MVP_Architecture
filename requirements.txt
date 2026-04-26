@@ -4,6 +4,8 @@ crewai[tools]
 crewai-tools
 pyyaml
 slack-bolt
+faiss-cpu
+sentence-transformers
 python-dotenv
 ollama
 qdrant-client

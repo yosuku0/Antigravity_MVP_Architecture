@@ -118,6 +118,17 @@ def load_job(state: State) -> State:
         feedback_match = re.findall(r"## Reject Feedback \(Gate \d\)\s*(.*?)(?:\n\n##|$)", body, re.DOTALL)
         if feedback_match:
             state["review_feedback"] = feedback_match[-1].strip()
+            # Capture for self-evolution
+            try:
+                from domains.feedback_memory import get_feedback_memory
+                memory = get_feedback_memory()
+                memory.add_lesson(
+                    task_description=body[:1000], # Task context
+                    feedback=state["review_feedback"],
+                    job_id=state["job_id"]
+                )
+            except Exception as e:
+                logger.warning(f"Failed to record lesson: {e}", extra={"job_id": state["job_id"]})
         else:
             state["review_feedback"] = "Rejected by operator without specific feedback."
     else:
