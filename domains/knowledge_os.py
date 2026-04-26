@@ -23,6 +23,9 @@ import threading
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from utils.logging_config import get_logger
+
+logger = get_logger("knowledge_os")
 from typing import Any
 
 import yaml
@@ -349,9 +352,9 @@ class KnowledgeOS:
                 document=content,
                 metadata={"topic": topic, "domain": domain},
             )
-        except Exception:
-            # Silently fail — vector search is enhancement, not requirement
-            pass
+        except Exception as e:
+            # Vector search is enhancement, but we log the failure at DEBUG level
+            logger.debug(f"Vector indexing failed for {topic}: {e}")
 
     def _vector_search(
         self, domain: str, query: str, *, n_results: int = 5
@@ -372,7 +375,8 @@ class KnowledgeOS:
                 }
                 for m in memories
             ]
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Load all failed for {domain}: {e}")
             return []
 
     def _fallback_search(
@@ -392,7 +396,8 @@ class KnowledgeOS:
                 score = sum(1 for term in terms if term in text)
                 if score > 0:
                     scored.append((score, path))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to read {path}: {e}")
                 continue
 
         scored.sort(reverse=True)
@@ -400,7 +405,8 @@ class KnowledgeOS:
         for score, path in scored[:n_results]:
             try:
                 content = path.read_text(encoding="utf-8")
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to read content from {path}: {e}")
                 content = ""
             results.append(
                 {

@@ -19,6 +19,9 @@ def test_hitl_gated_promotion_flow(tmp_path, monkeypatch):
     (tmp_path / "domains" / "game" / ".domain").write_text("allowed_squads: [coding_squad]", encoding="utf-8")
     
     monkeypatch.chdir(tmp_path)
+    from utils.logging_config import reset_logging, get_logger
+    reset_logging("graph")
+    get_logger("graph")
     
     job_id = "HITL-TEST-001"
     job_path = jobs_dir / f"{job_id}.md"
@@ -63,6 +66,16 @@ def test_hitl_gated_promotion_flow(tmp_path, monkeypatch):
     wiki_file = tmp_path / "domains" / "game" / "wiki" / f"job_{job_id}.md"
     assert wiki_file.exists(), f"Wiki file not found at {wiki_file}"
     assert "Artifact Content" in wiki_file.read_text(encoding="utf-8")
+    
+    # Verify Logging
+    log_file = work_dir / "system.jsonl"
+    assert log_file.exists(), f"Log file not found at {log_file}"
+    log_content = log_file.read_text(encoding="utf-8")
+    assert "HITL-TEST-001" in log_content
+    assert "Loaded job" in log_content
+    assert "Audit passed" in log_content
+    assert "Promoted" in log_content
+    print(f"\n--- system.jsonl sample ---\n{log_content.strip().splitlines()[-1]}")
     
     # Verify JOB file was NOT updated to promoted by the graph (graph status is promoted, but graph doesn't write back at the end of promote node yet)
     # Actually, promote_to_wiki node returns {status: promoted}. 

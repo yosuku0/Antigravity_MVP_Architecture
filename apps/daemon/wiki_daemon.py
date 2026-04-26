@@ -20,6 +20,9 @@ from pathlib import Path
 
 import yaml
 from utils.atomic_io import atomic_write, atomic_append
+from utils.logging_config import get_logger
+
+logger = get_logger("daemon")
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -36,7 +39,8 @@ def read_job_frontmatter(job_path: Path) -> dict:
         if len(parts) >= 3:
             return yaml.safe_load(parts[1]) or {}
         return {}
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to read frontmatter from {job_path}: {e}")
         return {}
 
 
@@ -111,8 +115,8 @@ def load_state() -> dict:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 state = json.load(f)
             return reconcile_state(state)
-        except (json.JSONDecodeError, KeyError):
-            pass
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Failed to parse daemon state: {e}")
     return reconcile_state({"jobs": {}})
 
 
@@ -184,7 +188,8 @@ def is_lock_stale(job_id: str) -> bool:
         # 死んでいるプロセスのロックのみ、stale 判定を行う
         return age_min > STALE_MINUTES
 
-    except (ValueError, OSError, TypeError):
+    except (ValueError, OSError, TypeError) as e:
+        logger.warning(f"Error checking lock status for {job_id}: {e}")
         return True
 
 
@@ -196,7 +201,8 @@ def reclaim_stale_lock(job_id: str) -> bool:
     try:
         lock_path.unlink()
         return try_lock(job_id)
-    except OSError:
+    except OSError as e:
+        logger.error(f"Failed to reclaim stale lock for {job_id}: {e}")
         return False
 
 
@@ -303,12 +309,12 @@ def main() -> None:
         return
 
     # Continuous mode
-    print(f"Daemon started — watching {JOBS_DIR} (interval: {args.interval}s)")
+    logger.info(f"Daemon started — watching {JOBS_DIR} (interval: {args.interval}s)")
     try:
         while True:
             processed = process_jobs()
             if processed > 0:
-                print(f"  Processed {processed} jobs")
+                logger.info(f"  Processed {processed} jobs")
             time.sleep(args.interval)
     except KeyboardInterrupt:
         log_event("shutdown", "daemon", "SIGINT received")

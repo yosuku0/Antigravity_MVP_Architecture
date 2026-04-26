@@ -30,6 +30,9 @@ from importlib.util import find_spec
 
 from domains.knowledge_os import KnowledgeOS
 from utils.atomic_io import atomic_write
+from utils.logging_config import get_logger
+
+logger = get_logger("graph")
 
 # Add project root to path before other local imports if needed
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
@@ -111,6 +114,7 @@ def load_job(state: State) -> State:
     else:
         state["status"] = "routing"
 
+    logger.info(f"Loaded job {state['job_id']} with status {fm_status}", extra={"job_id": state["job_id"]})
     return state
 
 
@@ -274,8 +278,8 @@ def audit(state: State) -> State:
             for other in {"game", "market", "personal"} - {domain}:
                 if other in content.lower() and f"derived_from: {other}" not in content:
                     issues.append(f"Cross-domain reference to '{other}' without derive() provenance")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Domain leakage check failed: {e}", extra={"job_id": state.get("job_id")})
 
     if issues:
         audit_result = f"FAIL: {'; '.join(issues)}"
@@ -294,8 +298,11 @@ def audit(state: State) -> State:
         fm["status"] = new_status
         write_frontmatter(state["job_path"], fm, body)
     except Exception as e:
-        print(f"[ERROR] Disk Sync failed: {e}")
+        logger.error(f"Disk Sync failed: {e}", exc_info=True, extra={"job_id": state.get("job_id")})
+        # If disk sync fails, the job cannot be resumed correctly.
+        return {**state, "status": "failed", "error": f"Disk Sync failed: {e}"}
 
+    logger.info(f"Audit passed for {state['job_id']}", extra={"job_id": state["job_id"]})
     return {
         **state,
         "audit_result": "PASS",
@@ -326,6 +333,7 @@ def promote_to_wiki(state: State) -> State:
             content=content,
             frontmatter={"job_id": job_id, "promoted_from": str(artifact_path)},
         )
+        logger.info(f"Promoted {job_id} to {domain} wiki", extra={"job_id": job_id})
         return {**state, "status": "promoted", "error": None}
     except Exception as e:
         return {**state, "status": "failed", "error": f"Promote failed: {e}"}
@@ -394,7 +402,8 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
                 # MemorySaver or similar
                 checkpointer = Checkpointer()
             return builder.compile(checkpointer=checkpointer)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Checkpointing initialization failed, running without persistence: {e}")
             return builder.compile()
 
     return builder.compile()
