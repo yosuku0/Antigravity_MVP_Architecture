@@ -308,15 +308,32 @@ def main() -> None:
         log_event("shutdown", "daemon", f"Processed {processed} jobs")
         return
 
+    # Initialize Slack Adapter
+    from apps.daemon.slack_adapter import AntigravitySlackAdapter
+    slack_adapter = AntigravitySlackAdapter()
+    slack_handler = slack_adapter.run_in_background()
+    if slack_handler:
+        logger.info("Slack Adapter started (Socket Mode)")
+
     # Continuous mode
     logger.info(f"Daemon started — watching {JOBS_DIR} (interval: {args.interval}s)")
     try:
         while True:
+            # Check for jobs needing Slack notification (audit_passed)
+            state = load_state()
+            for jid, info in state.get("jobs", {}).items():
+                if info.get("status") == "audit_passed":
+                    # Determine artifact path (staging)
+                    art_path = Path("work/artifacts/staging") / f"{jid}.md"
+                    slack_adapter.send_audit_notification(jid, str(art_path))
+            
             processed = process_jobs()
             if processed > 0:
                 logger.info(f"  Processed {processed} jobs")
             time.sleep(args.interval)
     except KeyboardInterrupt:
+        if slack_handler:
+            slack_handler.close()
         log_event("shutdown", "daemon", "SIGINT received")
         print("\nDaemon stopped")
 
