@@ -22,3 +22,6 @@ class State(TypedDict):
     # Phase D fields
     planned_objective: str | None
     routing_context: str | None
+    
+    # Phase E fields
+    parallel: bool

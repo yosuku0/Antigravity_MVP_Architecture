@@ -101,6 +101,7 @@ def load_job(state: State) -> State:
     state["planned_objective"] = None
     state["error"] = None
     state["audit_result"] = "pending"
+    state["parallel"] = frontmatter.get("parallel", False)
 
     return {**state, "status": "routing"}
 
