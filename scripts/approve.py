@@ -21,33 +21,52 @@ from utils.atomic_io import atomic_write, read_frontmatter, write_frontmatter
 LOG_FILE = Path("work/daemon.jsonl")
 
 
-def approve_gate_1(job_path: Path, approver: str) -> None:
+def approve_gate_1(job_path: Path, approver: str, reject: bool = False, reason: str = "") -> None:
     fm, body = read_frontmatter(job_path)
-    fm["status"] = "approved_gate_1"
-    fm["approved_by"] = approver
+    if reject:
+        fm["status"] = "gate_1_rejected"
+        fm["gate_1_rejected_by"] = approver
+        body = _append_feedback(body, 1, reason)
+    else:
+        fm["status"] = "approved_gate_1"
+        fm["approved_by"] = approver
     write_frontmatter(job_path, fm, body)
-    log_approval(fm.get("job_id", job_path.stem), 1, True)
+    log_approval(fm.get("job_id", job_path.stem), 1, not reject, reason)
 
 
-def approve_gate_2(job_path: Path, approver: str, reject: bool = False) -> None:
+def approve_gate_2(job_path: Path, approver: str, reject: bool = False, reason: str = "") -> None:
     fm, body = read_frontmatter(job_path)
     if reject:
         fm["status"] = "gate_2_rejected"
         fm["gate_2_rejected_by"] = approver
+        body = _append_feedback(body, 2, reason)
     else:
         fm["status"] = "staged"
         fm["approved_gate_2_by"] = approver
     write_frontmatter(job_path, fm, body)
-    log_approval(fm.get("job_id", job_path.stem), 2, not reject)
+    log_approval(fm.get("job_id", job_path.stem), 2, not reject, reason)
 
 
-def approve_gate_3(job_path: Path, approver: str) -> None:
+def approve_gate_3(job_path: Path, approver: str, reject: bool = False, reason: str = "") -> None:
     fm, body = read_frontmatter(job_path)
-    fm["status"] = "approved_gate_3"  # promoted から変更
-    fm["approved_gate_3_by"] = approver
-    fm["approved_gate_3_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if reject:
+        fm["status"] = "gate_3_rejected"
+        fm["gate_3_rejected_by"] = approver
+        body = _append_feedback(body, 3, reason)
+    else:
+        fm["status"] = "approved_gate_3"
+        fm["approved_gate_3_by"] = approver
+        fm["approved_gate_3_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     write_frontmatter(job_path, fm, body)
-    log_approval(fm.get("job_id", job_path.stem), 3, True)
+    log_approval(fm.get("job_id", job_path.stem), 3, not reject, reason)
+
+
+def _append_feedback(body: str, gate: int, reason: str) -> str:
+    """Append rejection feedback to the markdown body."""
+    if not reason:
+        return body
+    header = f"\n\n## Reject Feedback (Gate {gate})\n"
+    return body + header + reason + "\n"
 
 
 def log_approval(job_id: str, gate: int, approved: bool, reason: str = "") -> None:
@@ -83,21 +102,17 @@ def main() -> int:
     import os
     approver = args.approver or os.environ.get("USER") or os.environ.get("USERNAME") or "operator"
 
+    if args.gate == 1:
+        approve_gate_1(job_path, approver, args.reject, args.reason)
+    elif args.gate == 2:
+        approve_gate_2(job_path, approver, args.reject, args.reason)
+    elif args.gate == 3:
+        approve_gate_3(job_path, approver, args.reject, args.reason)
+
     if args.reject:
         print(f"Gate {args.gate}: REJECTED")
-        log_approval(job_path.stem, args.gate, False, args.reason)
-        # TODO: Update frontmatter status on reject if needed
-        return 2
-
-    # 承認実行
-    if args.gate == 1:
-        approve_gate_1(job_path, approver)
-    elif args.gate == 2:
-        approve_gate_2(job_path, approver)
-    elif args.gate == 3:
-        approve_gate_3(job_path, approver)
-
-    print(f"Gate {args.gate}: APPROVED")
+    else:
+        print(f"Gate {args.gate}: APPROVED")
     return 0
 
 

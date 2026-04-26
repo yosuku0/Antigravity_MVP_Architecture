@@ -111,6 +111,15 @@ def load_job(state: State) -> State:
         staging_path = Path("work/artifacts/staging") / f"{state['job_id']}.md"
         if staging_path.exists():
             state["artifact_path"] = staging_path
+    elif "_rejected" in fm_status:
+        # Recovery from rejection
+        state["status"] = "review_rejected"
+        # Extract feedback from body (look for the last ## Reject Feedback header)
+        feedback_match = re.findall(r"## Reject Feedback \(Gate \d\)\s*(.*?)(?:\n\n##|$)", body, re.DOTALL)
+        if feedback_match:
+            state["review_feedback"] = feedback_match[-1].strip()
+        else:
+            state["review_feedback"] = "Rejected by operator without specific feedback."
     else:
         state["status"] = "routing"
 
@@ -357,8 +366,12 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
     builder.set_entry_point("load_job")
     builder.add_conditional_edges(
         "load_job",
-        lambda state: "promote" if state.get("status") == "approved_gate_3" else "squad_router",
-        {"promote": "promote", "squad_router": "squad_router"}
+        lambda state: (
+            "promote" if state.get("status") == "approved_gate_3"
+            else "plan_executor" if state.get("status") == "review_rejected"
+            else "squad_router"
+        ),
+        {"promote": "promote", "plan_executor": "plan_executor", "squad_router": "squad_router"}
     )
 
     # Squad Router condition
