@@ -39,7 +39,10 @@ if PROJECT_ROOT not in sys.path:
 # LangGraph imports
 try:
     from langgraph.graph import StateGraph, END
-    from langgraph.checkpoint.sqlite import SqliteSaver
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver as Checkpointer
+    except ImportError:
+        from langgraph.checkpoint.memory import MemorySaver as Checkpointer
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
@@ -63,6 +66,7 @@ from apps.runtime.state import State
 from apps.runtime.nodes.plan_executor import plan_executor
 from apps.runtime.nodes.run_executor import run_executor
 from scripts.audit import scan_secrets
+from utils.atomic_io import read_frontmatter, write_frontmatter
 
 
 # ── State Schema ──────────────────────────────────────────────────────
@@ -81,20 +85,12 @@ def load_job(state: State) -> State:
         return {**state, "status": "failed", "error": f"Read error: {e}"}
 
     # Parse YAML frontmatter
-    frontmatter: dict[str, Any] = {}
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            try:
-                frontmatter = yaml.safe_load(parts[1]) or {}
-            except yaml.YAMLError:
-                pass
+    fm, body = read_frontmatter(job_path)
 
     state["job_id"] = job_path.stem
-    state["target_domain"] = frontmatter.get("domain", "")
+    state["target_domain"] = fm.get("domain", "")
     state["domain"] = state["target_domain"] # Sync for KnowledgeOS
     
-    body = parts[2].strip() if text.startswith("---") and len(parts) >= 3 else text
     state["routing_context"] = body[:2000]  # Truncate for routing
     state["review_count"] = 0 # Initialize loop counter
     state["review_feedback"] = None
@@ -102,9 +98,20 @@ def load_job(state: State) -> State:
     state["planned_objective"] = None
     state["error"] = None
     state["audit_result"] = "pending"
-    state["parallel"] = frontmatter.get("parallel", False)
+    state["parallel"] = fm.get("parallel", False)
 
-    return {**state, "status": "routing"}
+    # HITL Context Recovery
+    fm_status = fm.get("status", "created")
+    if fm_status == "approved_gate_3":
+        state["status"] = "approved_gate_3"
+        # Recover artifact path from disk
+        staging_path = Path("work/artifacts/staging") / f"{state['job_id']}.md"
+        if staging_path.exists():
+            state["artifact_path"] = staging_path
+    else:
+        state["status"] = "routing"
+
+    return state
 
 
 def router(state: State) -> State:
@@ -279,10 +286,20 @@ def audit(state: State) -> State:
             "error": audit_result,
         }
 
+    new_status = "audit_passed"
+    
+    # Disk Sync: Update physical JOB file
+    try:
+        fm, body = read_frontmatter(state["job_path"])
+        fm["status"] = new_status
+        write_frontmatter(state["job_path"], fm, body)
+    except Exception as e:
+        print(f"[ERROR] Disk Sync failed: {e}")
+
     return {
         **state,
         "audit_result": "PASS",
-        "status": "done",
+        "status": new_status,
         "error": None,
     }
 
@@ -330,7 +347,11 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
 
     # Add Edges
     builder.set_entry_point("load_job")
-    builder.add_edge("load_job", "squad_router")
+    builder.add_conditional_edges(
+        "load_job",
+        lambda state: "promote" if state.get("status") == "approved_gate_3" else "squad_router",
+        {"promote": "promote", "squad_router": "squad_router"}
+    )
 
     # Squad Router condition
     builder.add_conditional_edges(
@@ -358,15 +379,23 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
         }
     )
 
-    builder.add_edge("audit", "promote")
+    builder.add_edge("audit", END)
     builder.add_edge("promote", END)
 
     # Checkpointing for resilience
     if LANGGRAPH_AVAILABLE:
-        checkpoint_path = Path(checkpoint_db)
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        checkpointer = SqliteSaver.from_conn_string(str(checkpoint_path))
-        return builder.compile(checkpointer=checkpointer)
+        try:
+            # Check if it's SqliteSaver which needs from_conn_string
+            if hasattr(Checkpointer, "from_conn_string"):
+                checkpoint_path = Path(checkpoint_db)
+                checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+                checkpointer = Checkpointer.from_conn_string(str(checkpoint_path))
+            else:
+                # MemorySaver or similar
+                checkpointer = Checkpointer()
+            return builder.compile(checkpointer=checkpointer)
+        except Exception:
+            return builder.compile()
 
     return builder.compile()
 

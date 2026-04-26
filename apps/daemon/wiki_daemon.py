@@ -225,7 +225,7 @@ def process_jobs() -> int:
     """Process all queued jobs. Returns number processed."""
     state = load_state()
     count = 0
-    RUNNABLE_STATUSES = {"approved_gate_1"}
+    RUNNABLE_STATUSES = {"approved_gate_1", "approved_gate_3"}
 
     for job_id, job_info in state.get("jobs", {}).items():
         job_path = Path(job_info.get("path", ""))
