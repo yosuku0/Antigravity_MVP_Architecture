@@ -17,26 +17,24 @@ def run_executor(state: State) -> State:
     except Exception:
         llm = None
     
+    # 루ープ前に staging パスを1回だけ作成
+    staging_dir = Path("work/artifacts/staging")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = staging_dir / f"{job_id}.md"
+
     results = []
     for squad_name in squads:
         try:
-            # We use a temporary artifact path for staging
-            staging_dir = Path("work/artifacts/staging")
-            staging_dir.mkdir(parents=True, exist_ok=True)
-            artifact_path = staging_dir / f"{job_id}.md"
-            
             res = execute_squad(squad_name, llm, objective, artifact_path, domain=target_domain)
             results.append(f"### {squad_name}\n{res['result']}")
         except Exception as e:
             results.append(f"### {squad_name}\nERROR: {e}")
     
-    # Final staging artifact consolidation
-    final_artifact_path = Path(f"work/artifacts/staging/{job_id}.md")
-    final_artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    final_artifact_path.write_text("\n\n".join(results), encoding="utf-8")
+    # 1回だけ最終書き込み
+    artifact_path.write_text("\n\n".join(results), encoding="utf-8")
     
     return {
         **state,
         "status": "reviewing",
-        "artifact_path": final_artifact_path,
+        "artifact_path": artifact_path,
     }

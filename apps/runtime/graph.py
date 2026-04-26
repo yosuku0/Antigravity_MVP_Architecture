@@ -2,12 +2,16 @@
 graph.py — LangGraph orchestrator with domain-aware squad routing
 
 Graph structure:
-    load_job → router → squad_router → execute_squads → audit → END
+    load_job → squad_router → plan_executor → run_executor → brain_review → audit → promote → END
+
+    Feedback loop (L2, max 3 iterations):
+        brain_review --(failed, count<3)--> plan_executor
 
 Domain awareness:
   - JOB YAML frontmatter specifies target_domain (game|market|personal)
   - squad_router filters squads by domain permissions (.domain allowed_squads)
-  - execute_squads injects domain context into each squad's objective
+  - plan_executor constructs objective with optional review_feedback injection
+  - run_executor executes squads via apps.crew.squad_executor
   - Results are promoted to the correct domain wiki automatically
 """
 
