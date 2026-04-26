@@ -19,25 +19,27 @@ from __future__ import annotations
 
 import json
 import re
-import time
-import threading
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 import sys
-import yaml
 from importlib.util import find_spec
 
+# Add project root to path before local imports
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from domains.knowledge_os import KnowledgeOS
-from utils.atomic_io import atomic_write
 from utils.logging_config import get_logger
 
 logger = get_logger("graph")
 
-# Add project root to path before other local imports if needed
-PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+from apps.runtime.state import State
+from apps.runtime.nodes.plan_executor import plan_executor
+from apps.runtime.nodes.run_executor import run_executor
+from scripts.audit import scan_secrets
+from utils.atomic_io import read_frontmatter, write_frontmatter
 
 # LangGraph imports
 try:
@@ -65,12 +67,6 @@ CREWAI_AVAILABLE = find_spec("crewai") is not None
 # Terminal statuses for graph completion
 TERMINAL_STATUSES = {"done", "failed", "audit_failed", "promoted", "cancelled"}
 
-from apps.runtime.state import State
-from apps.runtime.nodes.plan_executor import plan_executor
-from apps.runtime.nodes.run_executor import run_executor
-from scripts.audit import scan_secrets
-from utils.atomic_io import read_frontmatter, write_frontmatter
-
 
 # ── State Schema ──────────────────────────────────────────────────────
 
@@ -83,12 +79,10 @@ def load_job(state: State) -> State:
         return {**state, "status": "failed", "error": f"JOB not found: {job_path}"}
 
     try:
-        text = job_path.read_text(encoding="utf-8")
+        # Parse YAML frontmatter
+        fm, body = read_frontmatter(job_path)
     except Exception as e:
         return {**state, "status": "failed", "error": f"Read error: {e}"}
-
-    # Parse YAML frontmatter
-    fm, body = read_frontmatter(job_path)
 
     state["job_id"] = job_path.stem
     state["target_domain"] = fm.get("domain", "")
@@ -249,7 +243,6 @@ def brain_review(state: State) -> State:
 
 def _call_review_squad(artifact_path: Path) -> dict:
     """Bridge to scripts/brain_review.py CLI."""
-    import sys
     from utils.safe_subprocess import run_generic
     try:
         # Run the review CLI using the current interpreter and absolute path
@@ -263,7 +256,6 @@ def _call_review_squad(artifact_path: Path) -> dict:
         # Try to parse JSON feedback if it exists
         feedback_path = Path("work/blackboard/feedback") / f"{artifact_path.stem}.json"
         if feedback_path.exists():
-            import json
             with open(feedback_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return {"passed": data.get("passed", passed), "feedback": data.get("feedback", "No feedback")}
