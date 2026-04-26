@@ -38,6 +38,22 @@ graph TD
 - Tier 2: local venv (`work/sandbox_venv/`)
 - Tier 3: skip with WARN log (Fallback)
 
+## Parallel Execution (Optional)
+
+Set `parallel: true` in the JOB YAML frontmatter to execute squads in parallel:
+
+```yaml
+---
+id: job-001
+domain: game
+parallel: true
+---
+# Objective here
+```
+
+When enabled, squads run concurrently using `ThreadPoolExecutor(max_workers=3)`,
+with artifact path isolation (`{job_id}_{squad_name}.md`) and guaranteed squad-order consolidation.
+
 ### Security
 - `subprocess` の使用は `utils/safe_subprocess.py` に集約
 - `scripts/scope_guard.py` で静的解析し、不正な `subprocess` 使用を遮断
@@ -58,7 +74,7 @@ Copy `.env.example` to `.env` and configure:
 | B | Done | LangGraph + HITL (Gate 1/2/3) + Audit |
 | C | Done | L2 Brain↔Developer 分離 + フィードバックループ |
 | D | Done | Brain↔Executor ノード分離 + coding_sandbox 強化 |
-| E | In Progress | Stability & Expansion (Step 1: Debt Reduction) |
+| E | Done | Stability & Expansion（レガシーテスト復活・Sandbox強化・並列実行）|
 
 ## Quick Start
 
@@ -100,7 +116,11 @@ scripts/
 ├── brain_review.py           # Review squad CLI
 ├── audit.py                  # Artifact audit logic
 └── promote.py                # Wiki promotion script
-tests/                        # 37 core tests (Phase A-E Step 1)
+tests/                        # 43 tests (27 core + 16 added in Phase E)
+├── test_sandbox_live.py  # Tier 2 sandbox live validation tests [NEW]
+└── test_run_executor.py  # Parallel execution mode tests [NEW]
+doc/                      # Phase completion reports and documentation
+└── phase_e_completion_report.md
 utils/
 └── safe_subprocess.py        # Subprocess wrapper with venv support
 work/
