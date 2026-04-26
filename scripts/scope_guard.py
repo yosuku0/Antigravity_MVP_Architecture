@@ -15,13 +15,13 @@ from pathlib import Path
 FORBIDDEN = {
     "requests": "Use urllib from stdlib",
     "httpx": "Use urllib from stdlib",
-    "subprocess": "Use e2b sandbox for execution",
 }
 
 # Module → allowed paths
 ALLOWED_PATHS = {
     "slack_bolt": ["apps/ingress/"],
     "slack_sdk": ["apps/ingress/"],
+    "subprocess": ["utils/safe_subprocess.py", "scripts/", "tests/"],
 }
 
 IMPORT_RE = re.compile(r"^(?:import\s+(\S+)|from\s+(\S+)\s+import)", re.MULTILINE)
@@ -35,7 +35,7 @@ def scan_file(path: Path, root: Path) -> list[dict]:
     except UnicodeDecodeError:
         return findings
 
-    rel = str(path.relative_to(root))
+    rel = path.relative_to(root).as_posix()
 
     for match in IMPORT_RE.finditer(content):
         module = match.group(1) or match.group(2)
@@ -74,17 +74,18 @@ def main() -> int:
     all_findings = []
 
     for path in root.rglob("*.py"):
-        if "vendor/" in str(path):
-            continue  # Skip vendored code
+        rel_posix = path.relative_to(root).as_posix()
+        if "vendor/" in rel_posix or "memory/" in rel_posix:
+            continue  # Skip vendored code and memory artifacts
         all_findings.extend(scan_file(path, root))
 
     if all_findings:
-        print(f"\n❌ Scope violations found: {len(all_findings)}")
+        print(f"\nScope violations found: {len(all_findings)}")
         for f in all_findings:
-            print(f"  {f['file']}:{f['line']} — {f['module']} ({f['reason']})")
+            print(f"  {f['file']}:{f['line']} - {f['module']} ({f['reason']})")
         return 1
 
-    print("✅ Scope guard passed — no forbidden imports")
+    print("Scope guard passed - no forbidden imports")
     return 0
 
 

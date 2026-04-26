@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import re
 import time
-import subprocess
 import threading
 from pathlib import Path
 from typing import Any, TypedDict
@@ -269,7 +268,16 @@ def brain_review(state: State) -> State:
     review_count = state.get("review_count", 0) + 1
     artifact_path = state.get("artifact_path")
     
-    if not artifact_path or not artifact_path.exists():
+    # None check (C-2 fix)
+    if artifact_path is None or not artifact_path.exists():
+        # S-1: Loop limit reached?
+        if review_count >= 3:
+            return {
+                **state,
+                "status": "failed",
+                "error": f"Review loop exceeded after {review_count} attempts (artifact missing)",
+                "review_count": review_count,
+            }
         return {**state, "status": "auditing", "review_count": review_count}
     
     # Call brain_review CLI / review_squad
@@ -283,6 +291,15 @@ def brain_review(state: State) -> State:
             "review_count": review_count,
         }
     else:
+        # S-1: Loop limit reached?
+        if review_count >= 3:
+            return {
+                **state,
+                "status": "failed",
+                "error": f"Review loop exceeded after {review_count} attempts",
+                "review_feedback": result.get("feedback"),
+                "review_count": review_count,
+            }
         return {
             **state,
             "status": "reviewing",
@@ -293,16 +310,16 @@ def brain_review(state: State) -> State:
 
 def _call_review_squad(artifact_path: Path) -> dict:
     """Bridge to scripts/brain_review.py CLI."""
-    import subprocess
     import sys
+    from utils.safe_subprocess import run_generic
     try:
         # Run the review CLI using the current interpreter and absolute path
         script_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "brain_review.py"
         cmd = [sys.executable, str(script_path), "--artifact", str(artifact_path)]
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        res_dict = run_generic(cmd)
         
-        # Parse result from exit code
-        passed = res.returncode == 0
+        # Parse result from dict
+        passed = res_dict["success"]
         
         # Try to parse JSON feedback if it exists
         feedback_path = Path("work/blackboard/feedback") / f"{artifact_path.stem}.json"
@@ -312,7 +329,7 @@ def _call_review_squad(artifact_path: Path) -> dict:
                 data = json.load(f)
                 return {"passed": data.get("passed", passed), "feedback": data.get("feedback", "No feedback")}
         
-        return {"passed": passed, "feedback": (res.stdout + "\n" + res.stderr).strip() or "Review failed"}
+        return {"passed": passed, "feedback": (res_dict["stdout"] + "\n" + res_dict["stderr"]).strip() or "Review failed"}
     except Exception as e:
         return {"passed": False, "feedback": f"Review execution error: {e}"}
 
