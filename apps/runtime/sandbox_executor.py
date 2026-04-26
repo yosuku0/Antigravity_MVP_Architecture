@@ -5,26 +5,21 @@ try:
 except ImportError:
     Sandbox = None
 from utils.safe_subprocess import run_in_venv, ensure_venv, get_venv_python
+from utils.logging_config import get_logger
+
+logger = get_logger("sandbox")
 
 VENV_DIR = Path("work/sandbox_venv")
 
-def _check_tier2_readiness() -> dict:
-    """Tier 2 が実行可能か事前チェック"""
-    # 1. Python インタープリタが存在するか
-    python_bin = get_venv_python(VENV_DIR)
-    if not python_bin.exists():
-        return {"ready": False, "reason": "venv Python not found"}
-    
-    # 2. pip が動作するか
+def _check_docker_readiness() -> dict:
+    """Check if Docker is available and image is ready."""
     try:
-        # venv のインタープリタで直接実行してチェック
-        res = run_in_venv(python_bin, "import pip; print('pip ok')", timeout=10)
-        if not res["success"]:
-            return {"ready": False, "reason": f"pip broken: {res['stderr']}"}
+        from utils.docker_executor import ensure_sandbox_image
+        if ensure_sandbox_image():
+            return {"ready": True}
+        return {"ready": False, "reason": "Docker image build failed"}
     except Exception as e:
-        return {"ready": False, "reason": f"pip check failed: {e}"}
-    
-    return {"ready": True}
+        return {"ready": False, "reason": f"Docker check failed: {e}"}
 
 
 def execute_code_safely(code: str, timeout: int = 60) -> dict:
@@ -54,24 +49,22 @@ def execute_code_safely(code: str, timeout: int = 60) -> dict:
         except Exception as e:
             print(f"[sandbox] Tier 1 (e2b) failed: {e}")
 
-    # Tier 2: Local venv
+    # Tier 2: Docker Sandbox
     try:
-        ensure_venv(VENV_DIR, Path("requirements.txt"))
-        
         # Readiness check before actual execution
-        readiness = _check_tier2_readiness()
+        readiness = _check_docker_readiness()
         if not readiness["ready"]:
-            print(f"[sandbox] Tier 2 readiness check failed: {readiness['reason']}")
+            print(f"[sandbox] Tier 2 (Docker) readiness check failed: {readiness['reason']}")
             # Fall through to Tier 3
         else:
-            python_path = get_venv_python(VENV_DIR)
-            res = run_in_venv(python_path, code, timeout=timeout)
+            from utils.docker_executor import run_in_docker
+            res = run_in_docker(code, timeout=timeout)
             return {
                 "tier": 2,
                 **res
             }
     except Exception as e:
-        print(f"[sandbox] Tier 2 (local) failed: {e}")
+        logger.error(f"[sandbox] Tier 2 (Docker) failed: {e}")
 
     # Tier 3: Skip
     return {

@@ -10,20 +10,16 @@ VENV_DIR_TEST = Path("work/sandbox_venv_test")
 import apps.runtime.sandbox_executor
 apps.runtime.sandbox_executor.VENV_DIR = VENV_DIR_TEST
 
-def test_tier2_venv_creation(monkeypatch):
-    """Tier 2 が実際に venv を作成できるか検証"""
+def test_tier2_docker_ready(monkeypatch):
+    """Tier 2 が Docker で動作することを検証"""
     # Force Tier 2 by clearing E2B_API_KEY
     monkeypatch.delenv("E2B_API_KEY", raising=False)
-    
-    # Remove venv if exists to test creation
-    if VENV_DIR_TEST.exists():
-        shutil.rmtree(VENV_DIR_TEST)
     
     res = execute_code_safely("print('hello')")
     
     assert res["tier"] == 2
-    assert VENV_DIR_TEST.exists()
     assert res["success"] is True
+    assert "hello" in res["stdout"]
 
 def test_tier2_code_execution(monkeypatch):
     """Tier 2 で実際に Python コードが実行できるか検証"""
