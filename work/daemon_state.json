@@ -1,0 +1,54 @@
+{
+  "jobs": {
+    "JOB-20250425-AUDIT-002": {
+      "status": "created",
+      "path": "work\\jobs\\JOB-20250425-AUDIT-002.md",
+      "created": "2026-04-25T03:33:22Z"
+    },
+    "JOB-20250425-HITL-001": {
+      "status": "created",
+      "path": "work\\jobs\\JOB-20250425-HITL-001.md",
+      "created": "2026-04-25T03:31:24Z"
+    },
+    "JOB-20250425-PLAN-000": {
+      "status": "created",
+      "path": "work\\jobs\\JOB-20250425-PLAN-000.md",
+      "created": "2026-04-25T03:37:45Z"
+    },
+    "JOB-20250425-SEC-003": {
+      "status": "created",
+      "path": "work\\jobs\\JOB-20250425-SEC-003.md",
+      "created": "2026-04-25T03:35:01Z"
+    },
+    "JOB-MANUAL-001": {
+      "status": "promoted",
+      "path": "work\\jobs\\JOB-MANUAL-001.md",
+      "created": "2026-04-24T17:57:14Z"
+    },
+    "JOB-NIM-001": {
+      "status": "audit_passed",
+      "path": "work\\jobs\\JOB-NIM-001.md",
+      "created": "2026-04-24T17:57:14Z"
+    },
+    "JOB-OLL-001": {
+      "status": "audit_passed",
+      "path": "work\\jobs\\JOB-OLL-001.md",
+      "created": "2026-04-24T17:57:14Z"
+    },
+    "JOB-T014-001": {
+      "status": "failed",
+      "path": "work\\jobs\\JOB-T014-001.md",
+      "created": "2026-04-24T17:57:14Z"
+    },
+    "PHASE-D-001": {
+      "status": "pending",
+      "path": "work\\jobs\\PHASE-D-001.md",
+      "created": "2026-04-26T00:01:56Z"
+    },
+    "sample_job": {
+      "status": "created",
+      "path": "work\\jobs\\sample_job.md",
+      "created": "2026-04-26T00:51:20Z"
+    }
+  }
+}

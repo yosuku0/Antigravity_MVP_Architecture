@@ -9,24 +9,28 @@ Responsibilities:
   5. Execute jobs via graph.py and log results
 """
 
-from __future__ import annotations
-
-import errno
-import json
-import os
 import sys
+import os
 import time
 from pathlib import Path
 
+# Add project root to path BEFORE local imports
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import json
+import errno
 import yaml
+import logging
+from dotenv import load_dotenv
 from utils.atomic_io import atomic_write, atomic_append
 from utils.logging_config import get_logger
 
-logger = get_logger("daemon")
+# Load environment variables
+load_dotenv()
 
-# Add project root to path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+logger = get_logger("daemon")
 
 
 def read_job_frontmatter(job_path: Path) -> dict:

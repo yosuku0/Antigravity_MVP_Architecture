@@ -1,11 +1,14 @@
 import os
 import time
 import logging
-from pathlib import Path
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from dotenv import load_dotenv
 from utils.atomic_io import read_frontmatter, write_frontmatter
 from utils.job_utils import get_job_path
+
+# Load environment variables
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +176,7 @@ class AntigravitySlackAdapter:
             fm["gate_3_rejected_by"] = approver
             
             # Append feedback to body
-            header = f"\n\n## Reject Feedback (Gate 3)\n"
+            header = "\n\n## Reject Feedback (Gate 3)\n"
             b = b + header + reason + "\n"
             write_frontmatter(job_path, fm, b)
 
