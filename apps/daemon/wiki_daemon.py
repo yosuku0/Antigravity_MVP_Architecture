@@ -124,9 +124,17 @@ def load_state() -> dict:
     return reconcile_state({"jobs": {}})
 
 
+class PathEncoder(json.JSONEncoder):
+    """Custom JSON encoder to handle Path objects."""
+    def default(self, obj):
+        if isinstance(obj, Path):
+            return str(obj)
+        return super().default(obj)
+
+
 def save_state(state: dict) -> None:
     """Atomically save daemon state."""
-    atomic_write(STATE_FILE, json.dumps(state, indent=2, ensure_ascii=False))
+    atomic_write(STATE_FILE, json.dumps(state, indent=2, ensure_ascii=False, cls=PathEncoder))
 
 
 def try_lock(job_id: str) -> bool:
