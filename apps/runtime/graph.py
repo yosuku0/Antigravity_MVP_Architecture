@@ -19,33 +19,32 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
-from typing import Any
-
 import sys
 from importlib.util import find_spec
+from pathlib import Path
+from typing import Any
 
 # Add project root to path before local imports
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from domains.knowledge_os import KnowledgeOS
-from utils.logging_config import get_logger
+from domains.knowledge_os import KnowledgeOS  # noqa: E402
+from utils.logging_config import get_logger  # noqa: E402
 
 logger = get_logger("graph")
 
-from apps.runtime.state import State
-from apps.runtime.nodes.plan_executor import plan_executor
-from apps.runtime.nodes.run_executor import run_executor
-from scripts.audit import scan_secrets
-from utils.atomic_io import read_frontmatter, write_frontmatter
+from apps.runtime.state import State  # noqa: E402
+from apps.runtime.nodes.plan_executor import plan_executor  # noqa: E402
+from apps.runtime.nodes.run_executor import run_executor  # noqa: E402
+from scripts.audit import scan_secrets  # noqa: E402
+from utils.atomic_io import read_frontmatter, write_frontmatter  # noqa: E402
 
 # LangGraph imports
 try:
     from langgraph.graph import StateGraph, END
     try:
-        from langgraph.checkpoint.sqlite import SqliteSaver as Checkpointer
+        from langgraph.checkpoint.sqlite import SqliteSaver as Checkpointer  # type: ignore
     except ImportError:
         from langgraph.checkpoint.memory import MemorySaver as Checkpointer
     LANGGRAPH_AVAILABLE = True
