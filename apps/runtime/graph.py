@@ -62,6 +62,7 @@ TERMINAL_STATUSES = {"done", "failed", "audit_failed", "promoted", "cancelled"}
 from apps.runtime.state import State
 from apps.runtime.nodes.plan_executor import plan_executor
 from apps.runtime.nodes.run_executor import run_executor
+from scripts.audit import scan_secrets
 
 
 # ── State Schema ──────────────────────────────────────────────────────
@@ -252,15 +253,9 @@ def audit(state: State) -> State:
     # Secret scan
     try:
         content = artifact_path.read_text(encoding="utf-8")
-        secret_patterns = [
-            r"sk-[a-zA-Z0-9]{20,}",  # OpenAI-style API keys
-            r"ghp_[a-zA-Z0-9]{36}",   # GitHub personal access tokens
-            r"AKIA[0-9A-Z]{16}",       # AWS access key ID
-            r"\b[0-9a-f]{64}\b",       # Hex secrets
-        ]
-        for pattern in secret_patterns:
-            if re.search(pattern, content):
-                issues.append(f"Potential secret found: {pattern[:20]}...")
+        findings = scan_secrets(content)
+        for f in findings:
+            issues.append(f"Potential secret found: {f['description']} ({f['match']})")
     except Exception as e:
         issues.append(f"Audit read error: {e}")
 
@@ -290,6 +285,33 @@ def audit(state: State) -> State:
         "status": "done",
         "error": None,
     }
+
+
+# Node aliases and additional nodes
+audit_node = audit
+
+def promote_to_wiki(state: State) -> State:
+    """Promote artifact to domain wiki via KnowledgeOS."""
+    artifact_path = state.get("artifact_path")
+    domain = state.get("target_domain")
+    job_id = state.get("job_id", "unknown")
+
+    if not artifact_path or not artifact_path.exists():
+        return {**state, "status": "failed", "error": "Artifact missing at promote"}
+
+    try:
+        from domains.knowledge_os import KnowledgeOS
+        content = artifact_path.read_text(encoding="utf-8")
+        kos = KnowledgeOS()
+        kos.save(
+            domain=domain,
+            topic=f"job_{job_id}",
+            content=content,
+            frontmatter={"job_id": job_id, "promoted_from": str(artifact_path)},
+        )
+        return {**state, "status": "promoted", "error": None}
+    except Exception as e:
+        return {**state, "status": "failed", "error": f"Promote failed: {e}"}
 
 
 # ── Graph Builder ─────────────────────────────────────────────────────

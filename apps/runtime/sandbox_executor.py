@@ -76,8 +76,9 @@ def execute_code_safely(code: str, timeout: int = 60) -> dict:
     # Tier 3: Skip
     return {
         "tier": 3,
-        "success": True,  # Don't fail the graph, just skip verification
+        "success": False,  # Don't allow false positive success
         "skipped": True,
+        "verification_skipped": True,
         "reason": "Both e2b and local venv failed or were unavailable"
     }
 

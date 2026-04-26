@@ -32,6 +32,11 @@ def test_promotion_flow(tmp_repo, monkeypatch):
     artifact_path = staging_dir / "wiki_page.md"
     artifact_path.write_text("Wiki Content", encoding="utf-8")
     
+    # Setup: Job file with approvals
+    job_path = Path("work/jobs/wiki_page.md")
+    job_path.parent.mkdir(parents=True, exist_ok=True)
+    job_path.write_text("---\nstatus: approved_gate_1\napproved_gate_2_by: dev\napproved_gate_3_by: mgr\n---\nBody", encoding="utf-8")
+
     # Mock Gate 3 approval (input returns 'y')
     monkeypatch.setattr("builtins.input", lambda _: "y")
     

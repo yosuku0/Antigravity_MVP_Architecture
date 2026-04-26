@@ -68,8 +68,9 @@ def approve_gate_2(job_path: Path, approver: str, reject: bool = False) -> None:
 
 def approve_gate_3(job_path: Path, approver: str) -> None:
     fm, body = _read_frontmatter(job_path)
-    fm["status"] = "promoted"
+    fm["status"] = "approved_gate_3"  # promoted から変更
     fm["approved_gate_3_by"] = approver
+    fm["approved_gate_3_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     _write_frontmatter(job_path, fm, body)
     log_approval(fm.get("job_id", job_path.stem), 3, True)
 
@@ -94,23 +95,34 @@ def main() -> int:
     parser.add_argument("--gate", type=int, choices=[1, 2, 3], default=1, help="Gate number")
     parser.add_argument("--reject", action="store_true", help="Reject instead of approve")
     parser.add_argument("--reason", default="", help="Rejection reason")
+    parser.add_argument("--approver", default=None, help="Approver name")
     args = parser.parse_args()
 
+    job_path = Path(args.job)
+    if not job_path.exists():
+        job_path = Path("work/jobs") / f"{args.job}.md"
+    if not job_path.exists():
+        print(f"[ERROR] Job not found: {args.job}")
+        return 1
+
+    import os
+    approver = args.approver or os.environ.get("USER") or os.environ.get("USERNAME") or "operator"
+
     if args.reject:
-        print(f"\n{'='*50}")
-        print(f"  Gate {args.gate}: REJECTED")
-        print(f"  Job: {args.job}")
-        if args.reason:
-            print(f"  Reason: {args.reason}")
-        print(f"{'='*50}\n")
-        log_approval(args.job, args.gate, False, args.reason)
+        print(f"Gate {args.gate}: REJECTED")
+        log_approval(job_path.stem, args.gate, False, args.reason)
+        # TODO: Update frontmatter status on reject if needed
         return 2
 
-    print(f"\n{'='*50}")
-    print(f"  Gate {args.gate}: APPROVED")
-    print(f"  Job: {args.job}")
-    print(f"{'='*50}\n")
-    log_approval(args.job, args.gate, True)
+    # 承認実行
+    if args.gate == 1:
+        approve_gate_1(job_path, approver)
+    elif args.gate == 2:
+        approve_gate_2(job_path, approver)
+    elif args.gate == 3:
+        approve_gate_3(job_path, approver)
+
+    print(f"Gate {args.gate}: APPROVED")
     return 0
 
 

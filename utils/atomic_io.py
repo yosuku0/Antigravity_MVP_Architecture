@@ -39,6 +39,8 @@ def atomic_append(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Open in append mode, write, and fsync
+    if not content.endswith("\n"):
+        content += "\n"
     with open(path, "a", encoding="utf-8") as f:
         f.write(content)
         f.flush()

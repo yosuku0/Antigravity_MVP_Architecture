@@ -15,14 +15,14 @@ def test_daemon_rebuild_state(tmp_repo, create_job, monkeypatch):
     # 2. Rebuild
     state = rebuild_state()
     assert "JOB-DAEMON" in state["jobs"]
-    assert state["jobs"]["JOB-DAEMON"]["status"] == "queued"
+    assert state["jobs"]["JOB-DAEMON"]["status"] == "created"
 
 def test_daemon_process_jobs(tmp_repo, create_job, monkeypatch):
     """T001: Daemon processing queued jobs."""
     monkeypatch.chdir(tmp_repo)
     
     # 1. Create a job
-    job_path = create_job("JOB-PROCESS", "queued")
+    job_path = create_job("JOB-PROCESS", "approved_gate_1")
     
     # Mock apps.runtime.graph.app.invoke to avoid actual execution
     # and return a mock result
@@ -43,7 +43,7 @@ def test_daemon_stale_lock_recovery(tmp_repo, create_job, monkeypatch):
     
     # 1. Create a job and a stale lock
     job_id = "JOB-STALE"
-    create_job(job_id, "queued")
+    create_job(job_id, "approved_gate_1")
     
     lock_dir = Path("work/locks")
     lock_dir.mkdir(parents=True, exist_ok=True)

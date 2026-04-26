@@ -33,16 +33,21 @@ def _run_sequential(squads, llm, objective, job_id, target_domain, staging_dir, 
     """Standard sequential execution."""
     artifact_path = staging_dir / f"{job_id}.md"
     results = []
+    errors = []
     for squad_name in squads:
         try:
             res = execute_squad(squad_name, llm, objective, artifact_path, domain=target_domain)
             results.append(f"### {squad_name}\n{res['result']}")
         except Exception as e:
+            errors.append(f"{squad_name}: {e}")
             results.append(f"### {squad_name}\nERROR: {e}")
     
     # 最終書き込み
     artifact_path.write_text("\n\n".join(results), encoding="utf-8")
     
+    if errors:
+        return {**state, "status": "failed", "error": "; ".join(errors)}
+
     return {
         **state,
         "status": "reviewing",
@@ -52,21 +57,24 @@ def _run_sequential(squads, llm, objective, job_id, target_domain, staging_dir, 
 
 def _run_parallel(squads, llm, objective, job_id, target_domain, staging_dir, state) -> State:
     """Parallel execution with isolated temporary artifacts."""
-    def run_one(squad_name: str) -> tuple[str, str]:
+    def run_one(squad_name: str) -> tuple[str, str, bool]:
         temp_path = staging_dir / f"{job_id}_{squad_name}.md"
         try:
             res = execute_squad(squad_name, llm, objective, temp_path, domain=target_domain)
-            return (squad_name, f"### {squad_name}\n{res['result']}")
+            return (squad_name, f"### {squad_name}\n{res['result']}", True)
         except Exception as e:
-            return (squad_name, f"### {squad_name}\nERROR: {e}")
+            return (squad_name, f"### {squad_name}\nERROR: {e}", False)
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_map = {
             executor.submit(run_one, name): name for name in squads
         }
         results = []
+        errors = []
         for future in concurrent.futures.as_completed(future_map):
-            squad_name, output = future.result()
+            squad_name, output, success = future.result()
+            if not success:
+                errors.append(output)
             # squads.index(squad_name) を使って元の順序を保持
             results.append((squads.index(squad_name), output))
     
@@ -77,6 +85,9 @@ def _run_parallel(squads, llm, objective, job_id, target_domain, staging_dir, st
     final_path = staging_dir / f"{job_id}.md"
     final_path.write_text(final_text, encoding="utf-8")
     
+    if errors:
+        return {**state, "status": "failed", "error": "; ".join(errors)}
+
     return {
         **state,
         "status": "reviewing",

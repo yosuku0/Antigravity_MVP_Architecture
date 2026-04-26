@@ -18,11 +18,26 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
 from utils.atomic_io import atomic_write, atomic_append
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def read_job_frontmatter(job_path: Path) -> dict:
+    """Read YAML frontmatter from a JOB file."""
+    try:
+        text = job_path.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            return {}
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            return yaml.safe_load(parts[1]) or {}
+        return {}
+    except Exception:
+        return {}
 
 
 LOCK_DIR = Path("work/locks")
@@ -45,8 +60,9 @@ def rebuild_state() -> dict:
 
     for path in sorted(JOBS_DIR.glob("*.md")):
         job_id = path.stem
+        fm = read_job_frontmatter(path)
         state["jobs"][job_id] = {
-            "status": "queued",
+            "status": fm.get("status", "created"),
             "path": str(path),
             "created": time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime)
@@ -70,14 +86,19 @@ def reconcile_state(state: dict) -> dict:
     if JOBS_DIR.exists():
         for path in sorted(JOBS_DIR.glob("*.md")):
             job_id = path.stem
+            fm = read_job_frontmatter(path)
             if job_id not in state["jobs"]:
                 state["jobs"][job_id] = {
-                    "status": "queued",
+                    "status": fm.get("status", "created"),
                     "path": str(path),
                     "created": time.strftime(
                         "%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime)
                     ),
                 }
+            else:
+                # Update status from file if not terminal
+                if state["jobs"][job_id]["status"] not in TERMINAL_STATUSES:
+                    state["jobs"][job_id]["status"] = fm.get("status", state["jobs"][job_id]["status"])
 
     save_state(state)
     return state
@@ -204,9 +225,20 @@ def process_jobs() -> int:
     """Process all queued jobs. Returns number processed."""
     state = load_state()
     count = 0
+    RUNNABLE_STATUSES = {"approved_gate_1"}
 
     for job_id, job_info in state.get("jobs", {}).items():
-        if job_info.get("status") in TERMINAL_STATUSES:
+        job_path = Path(job_info.get("path", ""))
+        fm = read_job_frontmatter(job_path)
+        job_status = fm.get("status", job_info.get("status", "created"))
+
+        if job_status in TERMINAL_STATUSES:
+            continue
+        
+        if job_status not in RUNNABLE_STATUSES:
+            log_event("skip", job_id, f"waiting for Gate 1; status={job_status}")
+            state["jobs"][job_id]["status"] = job_status
+            save_state(state)
             continue
 
         # Try to acquire lock

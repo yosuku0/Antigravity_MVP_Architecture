@@ -45,6 +45,41 @@ def compute_hash(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
+def _find_job_for_artifact(artifact_path: Path) -> Path | None:
+    """Find the JOB file that produced this artifact."""
+    job_id = artifact_path.stem
+    job_path = Path("work/jobs") / f"{job_id}.md"
+    return job_path if job_path.exists() else None
+
+
+def read_job_frontmatter(job_path: Path) -> dict:
+    """Read YAML frontmatter from a JOB file."""
+    try:
+        import yaml
+        text = job_path.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            return {}
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            return yaml.safe_load(parts[1]) or {}
+        return {}
+    except Exception:
+        return {}
+
+
+def log_incident(incident_type: str, resource: str, detail: str) -> None:
+    """Log an incident to daemon.jsonl."""
+    entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "type": "incident",
+        "incident": incident_type,
+        "resource": resource,
+        "detail": detail,
+    }
+    from utils.atomic_io import atomic_append
+    atomic_append(Path("work/daemon.jsonl"), json.dumps(entry, ensure_ascii=False))
+
+
 def gate_3_approve(artifact_name: str, domain: str | None) -> bool:
     """HITL Gate 3 — CLI approval for wiki promotion."""
     dest = f"domains/{domain}/wiki/" if domain else "work/wiki/"
@@ -96,10 +131,25 @@ def promote_file(
             print(json.dumps(audit_result, indent=2, ensure_ascii=False))
             return 5
         # --force used: allow bypass but log the failure
+        log_incident("force_promote_audit_failure", str(artifact_path), "operator_override")
         print("[WARN] Artifact audit failed but --force is set. Proceeding with promotion.")
         print(json.dumps(audit_result, indent=2, ensure_ascii=False))
 
-    # Gate 3
+    # JOB validation (Gate 2/3)
+    job_path = _find_job_for_artifact(artifact_path)
+    fm = read_job_frontmatter(job_path) if job_path else {}
+    
+    if not force:
+        if not fm.get("approved_gate_2_by"):
+            print("[ERROR] Gate 2 approval missing in JOB frontmatter")
+            return 2
+        if not fm.get("approved_gate_3_by"):
+            print("[ERROR] Gate 3 approval missing in JOB frontmatter")
+            return 2
+    else:
+        log_incident("force_promote_hitl_bypass", str(artifact_path), "operator_override")
+
+    # Gate 3 (Manual CLI prompt - redundant but kept for safety if requested)
     if not force:
         if not gate_3_approve(artifact_path.name, domain):
             print("[Gate 3] REJECTED — promotion cancelled")

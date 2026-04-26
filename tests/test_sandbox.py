@@ -49,4 +49,4 @@ def test_tier_3_fallback():
             result = execute_code_safely(code)
             assert result["tier"] == 3
             assert result["skipped"] is True
-            assert result["success"] is True
+            assert result["success"] is False
