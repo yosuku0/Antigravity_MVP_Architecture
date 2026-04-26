@@ -1,5 +1,4 @@
 import pytest
-pytestmark = pytest.mark.skip(reason="Legacy tests need update for Phase D architecture")
 import shutil
 from pathlib import Path
 import yaml
@@ -21,41 +20,29 @@ def test_audit_logic(tmp_path):
     assert res["passed"] is False
     assert any("NVIDIA NIM" in f["description"] for f in res["findings"])
 
-def test_promotion_flow(tmp_repo, create_job, monkeypatch):
-    """T012: Full promotion flow from working memory to wiki."""
-    # Setup: Approved Gate 2 job
-    job_id = "JOB-PROMOTE"
-    job_path = create_job(job_id, "audit_passed", audit_result="pass", approved_gate_2_by="tester")
+from scripts.promote import promote_file
+
+def test_promotion_flow(tmp_repo, monkeypatch):
+    """T012: Full promotion flow using promote_file."""
+    monkeypatch.chdir(tmp_repo)
     
-    # Setup: Artifact in working dir
-    working_dir = tmp_repo / "memory" / "working" / job_id
-    working_dir.mkdir(parents=True, exist_ok=True)
-    artifact_file = working_dir / "wiki_page.md"
-    artifact_file.write_text("Wiki Content", encoding="utf-8")
+    # Setup: Artifact in staging
+    staging_dir = Path("work/artifacts/staging")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = staging_dir / "wiki_page.md"
+    artifact_path.write_text("Wiki Content", encoding="utf-8")
     
-    # 1. Stage
-    stage_promotion(job_path, repo_root=tmp_repo)
-    with open(job_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f.read().split("---")[1])
-    assert data["status"] == "promotion_pending"
-    assert (tmp_repo / "work" / "artifacts" / "staging" / job_id / "wiki_page.md").exists()
+    # Mock Gate 3 approval (input returns 'y')
+    monkeypatch.setattr("builtins.input", lambda _: "y")
     
-    # 2. Gate 3 Approval (manual status update in job for test)
-    data["status"] = "approved_gate_3"
-    data["approved_gate_3_by"] = "tester"
-    from utils.atomic_io import atomic_write
-    yaml_text = yaml.dump(data, sort_keys=False)
-    atomic_write(job_path, f"---\n{yaml_text}---\n\nBody")
+    # Promote to work/wiki (default)
+    res = promote_file(artifact_path)
+    assert res == 0
+    assert Path("work/wiki/wiki_page.md").exists()
     
-    # 3. Promote
-    # Mock hermes_reflect subprocess to avoid error
-    import subprocess
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: MagicMock())
-    
-    promote_to_wiki(job_path, "tester", repo_root=tmp_repo)
-    assert (tmp_repo / "wiki" / "wiki_page.md").exists()
-    with open(job_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f.read().split("---")[1])
-    assert data["status"] == "promoted"
+    # Verify content and frontmatter
+    promoted_content = Path("work/wiki/wiki_page.md").read_text(encoding="utf-8")
+    assert "topic: wiki_page" in promoted_content
+    assert "Wiki Content" in promoted_content
 
 from unittest.mock import MagicMock

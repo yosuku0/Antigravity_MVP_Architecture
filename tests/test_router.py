@@ -1,5 +1,4 @@
 import pytest
-pytestmark = pytest.mark.skip(reason="Legacy tests need update for Phase D architecture")
 import os
 from apps.llm_router.router import UnifiedRouter, ProviderExhaustedError
 from apps.llm_router.complexity_scorer import classify_task
@@ -33,11 +32,12 @@ def test_router_budget_exhaustion(monkeypatch):
 def test_router_get_llm(monkeypatch):
     """Test get_llm returns an LLM object."""
     monkeypatch.setenv("NVIDIA_API_KEY", "mock")
-    router = UnifiedRouter()
     
-    # Mock crewai.LLM
+    # Mock CREWAI_LLM_AVAILABLE and LLM
+    monkeypatch.setattr("apps.llm_router.router.CREWAI_LLM_AVAILABLE", True)
     mock_llm = MagicMock()
     monkeypatch.setattr("apps.llm_router.router.LLM", lambda *args, **kwargs: mock_llm)
     
+    router = UnifiedRouter()
     llm = router.get_llm("nim_cheap")
     assert llm is not None

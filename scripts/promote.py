@@ -58,46 +58,26 @@ def gate_3_approve(artifact_name: str, domain: str | None) -> bool:
     return choice == "y"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Promote artifact to wiki")
-    parser.add_argument("artifact", help="Path to artifact file")
-    parser.add_argument(
-        "--domain",
-        choices=["game", "market", "personal"],
-        default=None,
-        help="Target domain wiki (default: work/wiki/)",
-    )
-    parser.add_argument(
-        "--force", action="store_true", help="Bypass Gate 3 (recovery only)"
-    )
-    parser.add_argument(
-        "--force-reason",
-        default=None,
-        help="Required when --force is used. Explain why promotion bypass is necessary.",
-    )
-    parser.add_argument(
-        "--topic",
-        default=None,
-        help="Wiki topic slug (default: artifact filename without extension)",
-    )
-    parser.add_argument(
-        "--squad",
-        default=None,
-        help="Squad name for permission checking",
-    )
-    args = parser.parse_args()
-
-    if args.force and not args.force_reason:
+def promote_file(
+    artifact: str | Path,
+    domain: str | None = None,
+    force: bool = False,
+    force_reason: str | None = None,
+    topic: str | None = None,
+    squad: str | None = None,
+) -> int:
+    """Core promotion logic. Returns exit code (0 for success)."""
+    if force and not force_reason:
         print("[ERROR] --force requires --force-reason")
         return 6
 
-    artifact_path = Path(args.artifact)
+    artifact_path = Path(artifact)
     if not artifact_path.exists():
         print(f"[ERROR] Artifact not found: {artifact_path}")
         return 1
 
     # Determine topic
-    topic = args.topic or artifact_path.stem
+    topic = topic or artifact_path.stem
     # Ensure valid slug
     topic = topic.replace(" ", "_").replace("-", "_")[:60]
 
@@ -111,7 +91,7 @@ def main() -> int:
     # Pre-promotion audit (mandatory)
     audit_result = audit_file(artifact_path)
     if not audit_result.get("passed", False):
-        if not args.force:
+        if not force:
             print("[ERROR] Artifact audit failed. Promotion blocked.")
             print(json.dumps(audit_result, indent=2, ensure_ascii=False))
             return 5
@@ -120,20 +100,20 @@ def main() -> int:
         print(json.dumps(audit_result, indent=2, ensure_ascii=False))
 
     # Gate 3
-    if not args.force:
-        if not gate_3_approve(artifact_path.name, args.domain):
+    if not force:
+        if not gate_3_approve(artifact_path.name, domain):
             print("[Gate 3] REJECTED — promotion cancelled")
             return 2
 
     # Promote via KnowledgeOS (domain-aware) or fallback to filesystem
     try:
-        if args.domain:
+        if domain:
             kos = KnowledgeOS()
             wiki_path = kos.save(
-                domain=args.domain,
+                domain=domain,
                 topic=topic,
                 content=content,
-                squad=args.squad,
+                squad=squad,
                 frontmatter={
                     "source_artifact": str(artifact_path),
                     "artifact_hash": compute_hash(artifact_path),
@@ -173,13 +153,52 @@ def main() -> int:
         "op": "promote",
         "artifact": str(artifact_path),
         "topic": topic,
-        "domain": args.domain,
+        "domain": domain,
         "hash": compute_hash(artifact_path),
     }
     from utils.atomic_io import atomic_append
     atomic_append(Path("work/daemon.jsonl"), json.dumps(state_entry))
 
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Promote artifact to wiki")
+    parser.add_argument("artifact", help="Path to artifact file")
+    parser.add_argument(
+        "--domain",
+        choices=["game", "market", "personal"],
+        default=None,
+        help="Target domain wiki (default: work/wiki/)",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Bypass Gate 3 (recovery only)"
+    )
+    parser.add_argument(
+        "--force-reason",
+        default=None,
+        help="Required when --force is used. Explain why promotion bypass is necessary.",
+    )
+    parser.add_argument(
+        "--topic",
+        default=None,
+        help="Wiki topic slug (default: artifact filename without extension)",
+    )
+    parser.add_argument(
+        "--squad",
+        default=None,
+        help="Squad name for permission checking",
+    )
+    args = parser.parse_args()
+
+    return promote_file(
+        artifact=args.artifact,
+        domain=args.domain,
+        force=args.force,
+        force_reason=args.force_reason,
+        topic=args.topic,
+        squad=args.squad,
+    )
 
 
 if __name__ == "__main__":

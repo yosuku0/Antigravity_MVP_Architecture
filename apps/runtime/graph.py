@@ -89,9 +89,18 @@ def load_job(state: State) -> State:
             except yaml.YAMLError:
                 pass
 
-    state["target_domain"] = frontmatter.get("domain")
+    state["job_id"] = job_path.stem
+    state["target_domain"] = frontmatter.get("domain", "")
+    state["domain"] = state["target_domain"] # Sync for KnowledgeOS
+    
     body = parts[2].strip() if text.startswith("---") and len(parts) >= 3 else text
     state["routing_context"] = body[:2000]  # Truncate for routing
+    state["review_count"] = 0 # Initialize loop counter
+    state["review_feedback"] = None
+    state["artifact_path"] = None
+    state["planned_objective"] = None
+    state["error"] = None
+    state["audit_result"] = "pending"
 
     return {**state, "status": "routing"}
 
