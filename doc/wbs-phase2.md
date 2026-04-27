@@ -48,7 +48,7 @@ Build order follows the principle of **verify before build, foundation before fe
 | A-001 | Verify `graph.py` existence | Determine if LangGraph StateGraph exists or must be built from scratch. | Kinetic_Protocol repo | Discovery report: file path, import status, skeleton vs. complete | — | `find` returns path; `python -c "import graph"` succeeds or fails with clear error | — | If skipped and file is missing, all Block B estimates are wrong |
 | A-002 | Verify `wiki_daemon.py` existence | Determine if daemon exists or must be built from scratch. | All 5 project repos | Discovery report: file path, functionality level, watchdog usage | — | `find` across all repos; file content inspected | — | **P0 risk** — if skipped and file is missing, Block B scope explodes |
 | A-003 | Verify `audit.py` existence | Determine if audit gate exists or must be built. | All project repos | Discovery report: file path, WARN/FAIL logic, secret scan capability | — | `find` returns path; script can be invoked with `--help` or is identified as missing | — | If skipped, Block D scope is undefined |
-| A-004 | Verify `promote.py` existence | Determine if promotion script exists or must be built. | All project repos | Discovery report: file path, Gate 3 enforcement, wiki write logic | — | `find` returns path; `--approved-by` parameter detected or missing | — | If skipped, Block D scope is undefined |
+| A-004 | Verify `promote.py` existence | Determine if promotion script exists or must be built. | All project repos | Discovery report: file path, Gate 3 enforcement, wiki write logic | — | `find` returns path; `--mode stage` and `--mode execute` parameters detected | — | If skipped, Block D scope is undefined |
 | A-005 | Verify `hermes_reflect.py` existence | Determine if Hermes reflection exists or must be built. | All project repos | Discovery report: file path, append-only behavior | — | `find` returns path; file content inspected | — | Low risk — simple append if missing |
 | A-006 | Verify NIM patch on `llm_router.py` | Confirm 4-line NIM integration patch is applied. | `Kinetic_Protocol/apps/crewai_crews/llm_router.py` | Patch status report: applied / not applied / partially applied | — | `grep NIMClient` in file; grep results documented | — | **P0 risk** — if not applied, router tasks are larger than estimated |
 | A-007 | Execute `complexity_scorer.py` | Verify scorer runs end-to-end with local Ollama. | `complexity_scorer.py`, running Ollama | Execution report: success/failure, latency, output format | — | `python complexity_scorer.py "test task"` produces valid JSON with `level` and `recommended_context` fields | — | **P0 risk** — if broken, router_node cannot classify |
@@ -158,7 +158,7 @@ A-009 (Ollama) ────┘
 
 **A-004: Verify `promote.py`**
 - Action: `find . -name "promote.py" -type f`
-- If found: inspect for `--approved-by` parameter, wiki write logic
+- If found: inspect for `approved_gate_2_by`/`approved_gate_3_by` frontmatter verification, wiki write logic
 - If not found: decision = BUILD `scripts/promote.py`
 - Time estimate: 15 min
 
@@ -276,7 +276,7 @@ During WBS execution, the following temptations must be explicitly rejected:
 | 2 | "Let's integrate Qdrant for RAG — the research node needs it" | Qdrant is deferred. MVP loads knowledge from flat Markdown files. | Any import of `qdrant_client` or reference to `localhost:6333` in runtime code. |
 | 3 | "Let's make checkpoint resume automatic — SqliteSaver is already there" | Checkpoint resume is P1. MVP safely fails the job on daemon crash. Operator clones to new JOB. | Any code that calls `graph.resume_from_checkpoint()` or equivalent. |
 | 4 | "Let's add multiple CrewAI crews for parallel execution" | Single crew per job per ADR-001. Multi-crew adds debugging complexity. | Any code that instantiates more than one `Crew` per job. |
-| 5 | "Let's make promote.py auto-trigger on audit PASS" | Violates HITL Gate 3 invariant. `promote.py` requires explicit `--approved-by` on every invocation. | Any event listener or callback that calls `promote.py` without human approval metadata. |
+| 5 | "Let's make promote.py auto-trigger on audit PASS" | Violates HITL Gate 3 invariant. `promote.py --mode execute` requires explicit `approved_gate_2_by` and `approved_gate_3_by` metadata in the JOB frontmatter. | Any event listener or callback that calls `promote.py` without human approval metadata. |
 | 6 | "Let's merge AUDIT_FAILED and GATE_2_REJECTED for simplicity" | They must remain distinct per lifecycle spec. Conflating them breaks metrics and debugging. | Any code path that assigns `audit_result: fail` when the human rejected at Gate 2. |
 | 7 | "Let's write to wiki/ from APPROVED_GATE_3 instead of PROMOTED" | `PROMOTED` is the only state that writes canonical wiki content. `APPROVED_GATE_3` is metadata only. | Any write to `wiki/` outside the `PROMOTED` transition handler. |
 | 8 | "Let's add Data Flywheel JSONL evaluation" | Data Flywheel is Phase 2. MVP saves logs only (`model_calls.jsonl`, `job_results.jsonl`). No evaluation loop. | Any code that reads `model_calls.jsonl` to compute metrics or trigger model selection. |

@@ -39,7 +39,7 @@ This document outlines the manual verification steps for the NIM-Kinetic Meta-Ag
 2. Verify: Status becomes `approved_gate_2`.
 
 ## Step 6: Promotion (Stage)
-1. Run: `py -3.12 scripts/promote.py --job work/jobs/JOB-001.md --stage`
+1. Run: `py -3.12 scripts/promote.py --job work/jobs/JOB-001.md --mode stage`
 2. Verify: Status becomes `promotion_pending`. Check `work/artifacts/staging/JOB-001/` for files.
 
 ## Step 7: HITL Gate 3 (Promotion Approval)
@@ -47,7 +47,7 @@ This document outlines the manual verification steps for the NIM-Kinetic Meta-Ag
 2. Verify: Status becomes `approved_gate_3`.
 
 ## Step 8: Final Promotion & Reflection
-1. Run: `py -3.12 scripts/promote.py --job work/jobs/JOB-001.md --promote`
+1. Run: `py -3.12 scripts/promote.py --job work/jobs/JOB-001.md --mode execute`
 2. Verify:
    - Status becomes `promoted`.
    - Files appear in `wiki/`.
