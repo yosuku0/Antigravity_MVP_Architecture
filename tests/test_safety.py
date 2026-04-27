@@ -1,7 +1,12 @@
 import pytest
 import yaml
+import sys
+import subprocess
+from pathlib import Path
 from scripts.audit import audit_file
 from scripts.approve import approve_gate_1
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 def test_t016_secret_leak_audit(tmp_path, tmp_repo, create_job):
     """T016: Secret leak detection in audit_file."""
@@ -12,15 +17,20 @@ def test_t016_secret_leak_audit(tmp_path, tmp_repo, create_job):
     assert res["passed"] is False
     assert any("NVIDIA NIM" in f["description"] for f in res["findings"])
     
-    # 2. Human rejection
+    # 2. Human rejection via CLI
     job_path = create_job("JOB-T016-REJECT", "audit_passed")
-    from scripts.approve import approve_gate_2
-    approve_gate_2(job_path, approver="higurashi", reject=True)
+    r = subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "approve.py"),
+         "--gate", "2", "--approver", "higurashi", "--reject",
+         "--reason", "secret detected", "--job", str(job_path)],
+        capture_output=True, text=True, cwd=str(PROJECT_ROOT)
+    )
+    assert r.returncode == 0, r.stderr
     
     parts = job_path.read_text(encoding="utf-8").split("---")
     fm = yaml.safe_load(parts[1])
     assert fm["status"] == "gate_2_rejected"
-    assert fm["gate_2_rejected_by"] == "higurashi"
+    assert fm["rejected_by"] == "higurashi"
 
 def test_t015_idempotent_rerun(tmp_repo, create_job):
     """T015: Idempotent re-run of previously failed job."""

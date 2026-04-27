@@ -86,7 +86,7 @@ class AntigravitySlackAdapter:
             logger.error(f"Failed to send Slack notification for {job_id}: {e}")
 
     def handle_approve(self, ack, body, client):
-        """Handle Approve button click."""
+        """Handle Approve button click (Gate 2 Only)."""
         ack()
         user_id = body["user"]["id"]
         if not self.is_authorized(user_id):
@@ -96,13 +96,25 @@ class AntigravitySlackAdapter:
         job_path = get_job_path(job_id)
         approver = body["user"]["username"]
         
-        logger.info(f"Approve request from Slack for {job_id} by @{approver}")
+        logger.info(f"Approve request (Gate 2) from Slack for {job_id} by @{approver}")
 
         try:
             fm, b = read_frontmatter(job_path)
-            fm["status"] = "approved_gate_3"
-            fm["approved_gate_3_by"] = approver
-            fm["approved_gate_3_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            current_status = fm.get("status", "created")
+            
+            # STRICT STATE CHECK: Gate 2 only
+            if current_status != "audit_passed":
+                client.chat_postEphemeral(
+                    channel=body["channel"]["id"],
+                    user=user_id,
+                    text=f"⚠️ *Approval Denied*: Slack Approve is only allowed for jobs in `audit_passed` state. Current state: `{current_status}`"
+                )
+                return
+
+            # Transition to approved_gate_2
+            fm["status"] = "approved_gate_2"
+            fm["approved_gate_2_by"] = approver
+            fm["approved_gate_2_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             write_frontmatter(job_path, fm, b)
 
             # Update message to show processed state
@@ -112,10 +124,10 @@ class AntigravitySlackAdapter:
                 blocks=[
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"✅ *Approved by @{approver}* at {time.strftime('%H:%M')} (UTC)\nJob: `{job_id}`"}
+                        "text": {"type": "mrkdwn", "text": f"✅ *Gate 2 Approved by @{approver}* at {time.strftime('%H:%M')} (UTC)\nJob: `{job_id}`"}
                     }
                 ],
-                text=f"✅ Approved: {job_id}"
+                text=f"✅ Gate 2 Approved: {job_id}"
             )
         except Exception as e:
             logger.error(f"Failed to process Slack approval for {job_id}: {e}")
@@ -156,11 +168,10 @@ class AntigravitySlackAdapter:
             logger.error(f"Failed to open Slack modal for {job_id}: {e}")
 
     def handle_reject_submission(self, ack, body, view, client):
-        """Handle modal submission for rejection."""
+        """Handle modal submission for rejection (Gate 2 Only)."""
         ack()
         user_id = body["user"]["id"]
         if not self.is_authorized(user_id):
-            # View submission requires a different response or just ignore
             return 
         
         job_id = view["private_metadata"]
@@ -168,15 +179,30 @@ class AntigravitySlackAdapter:
         approver = body["user"]["name"]
         job_path = get_job_path(job_id)
 
-        logger.info(f"Reject submission from Slack for {job_id} by @{approver}")
+        logger.info(f"Reject submission (Gate 2) from Slack for {job_id} by @{approver}")
 
         try:
             fm, b = read_frontmatter(job_path)
-            fm["status"] = "gate_3_rejected"
-            fm["gate_3_rejected_by"] = approver
+            current_status = fm.get("status", "created")
+
+            # STRICT STATE CHECK: Gate 2 only
+            if current_status != "audit_passed":
+                client.chat_postEphemeral(
+                    channel=self.channel_id,
+                    user=user_id,
+                    text=f"⚠️ *Rejection Denied*: Slack Reject is only allowed for jobs in `audit_passed` state. Current state: `{current_status}`"
+                )
+                return
+
+            # Transition to gate_2_rejected
+            fm["status"] = "gate_2_rejected"
+            fm["rejected_gate"] = 2
+            fm["rejected_by"] = approver
+            fm["rejected_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            fm["reject_reason"] = reason
             
             # Append feedback to body
-            header = "\n\n## Reject Feedback (Gate 3)\n"
+            header = "\n\n## Reject Feedback (Gate 2)\n"
             b = b + header + reason + "\n"
             write_frontmatter(job_path, fm, b)
 
@@ -189,7 +215,7 @@ class AntigravitySlackAdapter:
                     blocks=[
                         {
                             "type": "section",
-                            "text": {"type": "mrkdwn", "text": f"❌ *Rejected by @{approver}*\nReason: _{reason}_\nJob: `{job_id}`"}
+                            "text": {"type": "mrkdwn", "text": f"❌ *Gate 2 Rejected by @{approver}*\nReason: _{reason}_\nJob: `{job_id}`"}
                         }
                     ],
                     text=f"❌ Rejected: {job_id}"
@@ -201,11 +227,11 @@ class AntigravitySlackAdapter:
         return [
             {
                 "type": "header", 
-                "text": {"type": "plain_text", "text": f"🔍 Audit Pending: {job_id}"}
+                "text": {"type": "plain_text", "text": f"🔍 Gate 2 Audit Pending: {job_id}"}
             },
             {
                 "type": "section", 
-                "text": {"type": "mrkdwn", "text": f"An artifact is ready for review:\n`{artifact_path}`"}
+                "text": {"type": "mrkdwn", "text": f"A generated artifact is ready for *Gate 2* review:\n`{artifact_path}`\n\nPlease approve to stage for promotion, or reject with feedback."}
             },
             {
                 "type": "actions", 

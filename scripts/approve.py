@@ -21,8 +21,30 @@ from utils.atomic_io import atomic_write, read_frontmatter, write_frontmatter
 LOG_FILE = Path("work/daemon.jsonl")
 
 
+# ── State Machine Configuration ───────────────────────────────────────
+
+ALLOWED_APPROVAL_TRANSITIONS = {
+    2: {
+        "from": {"audit_passed"},
+        "to": "approved_gate_2",
+        "by_field": "approved_gate_2_by",
+        "at_field": "approved_gate_2_at",
+    },
+    3: {
+        "from": {"promotion_pending"},
+        "to": "approved_gate_3",
+        "by_field": "approved_gate_3_by",
+        "at_field": "approved_gate_3_at",
+    },
+}
+
+# ── Business Logic ───────────────────────────────────────────────────
+
 def approve_gate_1(job_path: Path, approver: str, reject: bool = False, reason: str = "") -> None:
+    """Gate 1 is currently flexible but records status."""
     fm, body = read_frontmatter(job_path)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    
     if reject:
         fm["status"] = "gate_1_rejected"
         fm["gate_1_rejected_by"] = approver
@@ -30,35 +52,60 @@ def approve_gate_1(job_path: Path, approver: str, reject: bool = False, reason: 
     else:
         fm["status"] = "approved_gate_1"
         fm["approved_by"] = approver
+        fm["approved_at"] = now
+        
     write_frontmatter(job_path, fm, body)
     log_approval(fm.get("job_id", job_path.stem), 1, not reject, reason)
 
 
-def approve_gate_2(job_path: Path, approver: str, reject: bool = False, reason: str = "") -> None:
-    fm, body = read_frontmatter(job_path)
-    if reject:
-        fm["status"] = "gate_2_rejected"
-        fm["gate_2_rejected_by"] = approver
-        body = _append_feedback(body, 2, reason)
-    else:
-        fm["status"] = "staged"
-        fm["approved_gate_2_by"] = approver
-    write_frontmatter(job_path, fm, body)
-    log_approval(fm.get("job_id", job_path.stem), 2, not reject, reason)
+def process_approval(job_path: Path, gate: int, approver: str, reject: bool = False, reason: str = "") -> bool:
+    """Consolidated state-aware approval logic for Gate 2 and 3."""
+    if gate == 1:
+        approve_gate_1(job_path, approver, reject, reason)
+        return True
 
+    # Gate 3 Reject is not supported in MVP
+    if reject and gate == 3:
+        print("[ERROR] Gate 3 reject is not supported in this MVP.")
+        return False
 
-def approve_gate_3(job_path: Path, approver: str, reject: bool = False, reason: str = "") -> None:
     fm, body = read_frontmatter(job_path)
+    current_status = fm.get("status", "created")
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    config = ALLOWED_APPROVAL_TRANSITIONS.get(gate)
+    if not config:
+        print(f"[ERROR] Unsupported gate: {gate}")
+        return False
+
+    # STRICT STATE CHECK
+    if current_status not in config["from"]:
+        print(f"[ERROR] Gate {gate} DENIED.")
+        print(f"Current Status: '{current_status}'")
+        print(f"Required Status: one of {config['from']}")
+        return False
+
     if reject:
-        fm["status"] = "gate_3_rejected"
-        fm["gate_3_rejected_by"] = approver
-        body = _append_feedback(body, 3, reason)
+        if gate == 2:
+            fm["status"] = "gate_2_rejected"
+            fm["rejected_gate"] = 2
+            fm["rejected_by"] = approver
+            fm["rejected_at"] = now
+            fm["reject_reason"] = reason
+            body = _append_feedback(body, 2, reason)
+        else:
+            # Should not reach here if gate==3 check is above, but for safety:
+            print(f"[ERROR] Reject not supported for gate {gate}")
+            return False
     else:
-        fm["status"] = "approved_gate_3"
-        fm["approved_gate_3_by"] = approver
-        fm["approved_gate_3_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # APPROVE
+        fm["status"] = config["to"]
+        fm[config["by_field"]] = approver
+        fm[config["at_field"]] = now
+
     write_frontmatter(job_path, fm, body)
-    log_approval(fm.get("job_id", job_path.stem), 3, not reject, reason)
+    log_approval(fm.get("job_id", job_path.stem), gate, not reject, reason)
+    return True
 
 
 def _append_feedback(body: str, gate: int, reason: str) -> str:
@@ -102,12 +149,10 @@ def main() -> int:
     import os
     approver = args.approver or os.environ.get("USER") or os.environ.get("USERNAME") or "operator"
 
-    if args.gate == 1:
-        approve_gate_1(job_path, approver, args.reject, args.reason)
-    elif args.gate == 2:
-        approve_gate_2(job_path, approver, args.reject, args.reason)
-    elif args.gate == 3:
-        approve_gate_3(job_path, approver, args.reject, args.reason)
+    success = process_approval(job_path, args.gate, approver, args.reject, args.reason)
+    
+    if not success:
+        return 1
 
     if args.reject:
         print(f"Gate {args.gate}: REJECTED")

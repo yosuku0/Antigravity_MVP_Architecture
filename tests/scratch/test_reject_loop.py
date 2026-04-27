@@ -1,4 +1,5 @@
 import sys
+import subprocess
 import shutil
 from pathlib import Path
 
@@ -30,10 +31,23 @@ def test_reject_loop_flow(tmp_path, monkeypatch):
     res1 = run_job(str(job_path))
     print(f"Status after run 1: {res1['status']}")
     
-    # 2. Manually Reject
+    # 2. Manually Reject via CLI (approve_gate_2 function removed)
     print("\n=== Step 2: Manually Rejecting via CLI ===")
-    from scripts.approve import approve_gate_2
-    approve_gate_2(job_path, "operator", reject=True, reason="Please add more comments.")
+    # Ensure job is in audit_passed for rejection to work
+    from utils.atomic_io import read_frontmatter
+    fm, body = read_frontmatter(job_path)
+    if fm.get("status") != "audit_passed":
+        fm["status"] = "audit_passed"
+        write_frontmatter(job_path, fm, body)
+    
+    r = subprocess.run(
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "approve.py"),
+         "--gate", "2", "--approver", "operator", "--reject",
+         "--reason", "Please add more comments.", "--job", str(job_path)],
+        capture_output=True, text=True, cwd=str(PROJECT_ROOT)
+    )
+    assert r.returncode == 0, r.stderr
+
     
     # Verify job file state
     text = job_path.read_text(encoding="utf-8")
