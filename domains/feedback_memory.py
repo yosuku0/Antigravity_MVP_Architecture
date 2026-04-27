@@ -28,12 +28,13 @@ class FeedbackMemory:
         self.model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
         self.dimension = 384
         
-        # 排他制御用ロック
-        self.lock = threading.Lock()
+        # 排他制御用ロック (再入可能ロックを使用)
+        self.lock = threading.RLock()
         
-        # インデックスとメタデータの初期化
-        self.index = self._load_index()
-        self.metadata = self._load_metadata()
+        with self.lock:
+            # インデックスとメタデータの初期化
+            self.index = self._load_index()
+            self.metadata = self._load_metadata()
 
     def _load_index(self):
         if self.index_path.exists():
@@ -58,12 +59,13 @@ class FeedbackMemory:
         if not task_description or not feedback:
             return
 
-        # 1. 埋め込み生成と L2 正規化 (コサイン類似度用)
-        embedding = self.model.encode([task_description])[0].astype('float32')
-        embedding_arr = np.array([embedding])
-        faiss.normalize_L2(embedding_arr)
-        
         with self.lock:
+            # 1. 埋め込み生成と L2 正規化 (コサイン類似度用)
+            # ロック内で実行し、モデルへのアクセスを直列化
+            embedding = self.model.encode([task_description])[0].astype('float32')
+            embedding_arr = np.array([embedding])
+            faiss.normalize_L2(embedding_arr)
+            
             # 2. FAISS インデックスに追加
             self.index.add(embedding_arr)
             
@@ -75,48 +77,70 @@ class FeedbackMemory:
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             })
             
-            # 4. 物理ファイルへの永続化
+            # 4. 物理ファイルへの永続化 (Atomic Save)
             self._save()
             logger.info(f"Learned new lesson from job {job_id}", extra={"job_id": job_id})
 
     def search_lessons(self, current_task: str, top_k=3, threshold=0.5) -> list[str]:
         """現在のタスクに類似した過去の教訓を検索 (閾値以上のものを返す)"""
-        if not current_task or self.index.ntotal == 0:
-            return []
+        with self.lock:
+            if not current_task or self.index.ntotal == 0:
+                return []
 
-        # 1. クエリの埋め込み生成と正規化
-        query_vector = self.model.encode([current_task])[0].astype('float32')
-        query_arr = np.array([query_vector])
-        faiss.normalize_L2(query_arr)
-        
-        # 2. 内積検索 (正規化済みなのでコサイン類似度と同等)
-        distances, indices = self.index.search(query_arr, top_k)
-
-        results = []
-        for score, idx in zip(distances[0], indices[0]):
-            if idx == -1: continue
+            # 1. クエリの埋め込み生成と正規化
+            query_vector = self.model.encode([current_task])[0].astype('float32')
+            query_arr = np.array([query_vector])
+            faiss.normalize_L2(query_arr)
             
-            # コサイン類似度が閾値以上なら採用
-            if score > threshold: 
-                meta = self.metadata[idx]
-                results.append(
-                    f"Past Task: {meta['task']}\n"
-                    f"   -> Lesson: {meta['feedback']} (Similarity: {score:.2f})"
-                )
-        
-        return results
+            # 2. 内積検索 (正規化済みなのでコサイン類似度と同等)
+            distances, indices = self.index.search(query_arr, top_k)
+
+            results = []
+            for score, idx in zip(distances[0], indices[0]):
+                if idx == -1: continue
+                
+                # コサイン類似度が閾値以上なら採用
+                if score > threshold: 
+                    meta = self.metadata[idx]
+                    results.append(
+                        f"Past Task: {meta['task']}\n"
+                        f"   -> Lesson: {meta['feedback']} (Similarity: {score:.2f})"
+                    )
+            
+            return results
 
     def _save(self):
-        """インデックスとメタデータを物理ファイルに保存"""
-        faiss.write_index(self.index, str(self.index_path))
-        with open(self.meta_path, "w", encoding="utf-8") as f:
-            json.dump(self.metadata, f, indent=2, ensure_ascii=False)
+        """インデックスとメタデータを物理ファイルにアトミックに保存"""
+        # 1. インデックスのアトミック保存
+        tmp_index = self.index_path.with_suffix(".index.tmp")
+        try:
+            faiss.write_index(self.index, str(tmp_index))
+            os.replace(tmp_index, self.index_path)
+        except Exception as e:
+            logger.error(f"Failed atomic save for FAISS index: {e}")
+            if tmp_index.exists(): tmp_index.unlink()
+
+        # 2. メタデータのアトミック保存
+        tmp_meta = self.meta_path.with_suffix(".json.tmp")
+        try:
+            with open(tmp_meta, "w", encoding="utf-8") as f:
+                json.dump(self.metadata, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_meta, self.meta_path)
+        except Exception as e:
+            logger.error(f"Failed atomic save for metadata: {e}")
+            if tmp_meta.exists(): tmp_meta.unlink()
+
+        # 注意: このメソッドは個別のファイル破損を防ぎますが、
+        # インデックスとメタデータの間のマルチファイル・トランザクションは提供しません。
 
 # Singleton Instance Management
 _memory_instance = None
+_memory_lock = threading.RLock()
 
 def get_feedback_memory() -> FeedbackMemory:
     global _memory_instance
     if _memory_instance is None:
-        _memory_instance = FeedbackMemory()
+        with _memory_lock:
+            if _memory_instance is None:
+                _memory_instance = FeedbackMemory()
     return _memory_instance
