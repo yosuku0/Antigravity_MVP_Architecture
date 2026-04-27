@@ -53,26 +53,38 @@ def execute_code_safely(code: str, timeout: int = 60) -> dict:
     try:
         # Readiness check before actual execution
         readiness = _check_docker_readiness()
-        if not readiness["ready"]:
-            print(f"[sandbox] Tier 2 (Docker) readiness check failed: {readiness['reason']}")
-            # Fall through to Tier 3
-        else:
+        if readiness["ready"]:
             from utils.docker_executor import run_in_docker
             res = run_in_docker(code, timeout=timeout)
             return {
                 "tier": 2,
                 **res
             }
+        else:
+            print(f"[sandbox] Tier 2 (Docker) readiness check failed: {readiness['reason']}")
     except Exception as e:
         logger.error(f"[sandbox] Tier 2 (Docker) failed: {e}")
 
-    # Tier 3: Skip
+    # Tier 3: Local venv fallback
+    try:
+        ensure_venv(VENV_DIR)
+        python_path = get_venv_python(VENV_DIR)
+        res = run_in_venv(python_path, code, timeout=timeout)
+        return {
+            "tier": 3,
+            **res,
+            "skipped": False,
+        }
+    except Exception as e:
+        logger.warning(f"[sandbox] Tier 3 (local venv) failed: {e}")
+
+    # Tier 4: Skip
     return {
-        "tier": 3,
-        "success": False,  # Don't allow false positive success
+        "tier": 3,  # Keep tier 3 as the final state for legacy compatibility
+        "success": False,
         "skipped": True,
         "verification_skipped": True,
-        "reason": "Both e2b and local venv failed or were unavailable"
+        "reason": "e2b, Docker, and local venv failed or were unavailable"
     }
 
 def execute_artifact_safely(artifact_path: Path, timeout: int = 60) -> dict:
