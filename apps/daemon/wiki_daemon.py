@@ -455,13 +455,33 @@ def main() -> None:
     logger.info(f"Daemon started — watching {JOBS_DIR} (interval: {args.interval}s)")
     try:
         while True:
-            # Check for jobs needing Slack notification (audit_passed)
+            # Gate 2 Slack notification: send only when audit_passed and not yet notified.
             state = load_state()
             for jid, info in state.get("jobs", {}).items():
-                if info.get("status") == "audit_passed":
-                    # Determine artifact path (staging)
-                    art_path = Path("work/artifacts/staging") / f"{jid}.md"
-                    slack_adapter.send_audit_notification(jid, str(art_path))
+                job_path = Path(info.get("path", ""))
+                if not job_path.exists():
+                    continue
+                fm = read_job_frontmatter(job_path)
+
+                # Only notify for audit_passed jobs
+                if fm.get("status") != "audit_passed":
+                    continue
+
+                # Dedup: slack_adapter writes slack_ts on success; skip if already notified.
+                if fm.get("slack_ts"):
+                    continue
+
+                # Use the artifact_path recorded in JOB frontmatter (not staging path —
+                # staging does not exist yet at audit_passed stage).
+                artifact_path = fm.get("artifact_path")
+                if not artifact_path or not Path(artifact_path).exists():
+                    logger.warning(
+                        "Skipping Slack Gate 2 notification: artifact_path missing or not found",
+                        extra={"job_id": jid, "artifact_path": artifact_path},
+                    )
+                    continue
+
+                slack_adapter.send_audit_notification(jid, str(artifact_path))
             
             processed = process_jobs_parallel(executor)
             if processed > 0:
