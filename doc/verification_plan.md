@@ -92,8 +92,8 @@ This plan does not verify that the system "works." It verifies that the system *
 |---|---|
 | **Purpose** | Verify that `audit.py` FAIL result blocks `promote.py` regardless of human intent. |
 | **Setup** | Create a completed job artifact containing a fake secret pattern (`AWS_SECRET_ACCESS_KEY=AKIA...`). Set JOB status to `audit_failed`. |
-| **Trigger** | Run `promote.py --job JOB-003` (with or without `--approved-by`). |
-| **Expected Outcome** | `promote.py` checks `audit_result` field. If `audit_result != "pass"`, exits with code `1` and message `"Promotion blocked: audit_result=fail. Fix audit issues before promotion."`. No write to `wiki/`. |
+| **Trigger** | Run `scripts/promote.py --job work/jobs/JOB-003.md --mode execute`. |
+| **Expected Outcome** | `promote.py` checks `audit_result` and Gate 2/3 approval fields. If `audit_result != "pass"`, exits with code `1` and message `"Promotion blocked: audit_result=fail. Fix audit issues before promotion."`. No write to `wiki/`. |
 | **Pass/Fail Signal** | `PASS`: Exit code 1; `wiki/` unchanged; log entry `promotion_blocked: audit_fail`. `FAIL`: `wiki/` receives new file; or exit code 0. |
 | **Automatable** | **Now** — shell script with temp directories. |
 | **CTM Task** | TASK-007 (audit + promote) |
@@ -120,7 +120,7 @@ This plan does not verify that the system "works." It verifies that the system *
 |---|---|
 | **Purpose** | Verify that audit-passed artifacts are not merged or promoted without Gate 2 approval. |
 | **Setup** | Create `JOB-005.md` with `status: audit_passed` but no `approved_gate_2_by` field. Place a valid artifact in `memory/working/JOB-005/`. |
-| **Trigger** | Run `promote.py --job JOB-005` or attempt to merge artifact. |
+| **Trigger** | Run `scripts/promote.py --job work/jobs/JOB-005.md --mode stage` or attempt to merge artifact. |
 | **Expected Outcome** | Any tool that would apply the artifact (merge script, promote script) checks `approved_gate_2_by`. If missing, exits with code `1` and message `"Gate 2 approval required. Run: approve --job JOB-005 --gate 2"`. Artifact remains in `memory/working/`; never reaches `wiki/` or git branch. |
 | **Pass/Fail Signal** | `PASS`: Artifact not promoted; git branch unchanged. `FAIL`: Artifact merged or promoted without approval field. |
 | **Automatable** | **Now** — shell script with temp git repo and temp wiki dir. |
@@ -134,8 +134,8 @@ This plan does not verify that the system "works." It verifies that the system *
 |---|---|
 | **Purpose** | Verify that `wiki/` is never written before Gate 3 approval. |
 | **Setup** | Create `JOB-006.md` with `status: approved_gate_2` and staging area populated, but no `approved_gate_3_by`. |
-| **Trigger** | Run `promote.py --job JOB-006` without `--gate-3-approved-by`. |
-| **Expected Outcome** | `promote.py` checks `approved_gate_3_by` and `approved_gate_3_at`. If missing, exits code 1 with message `"Gate 3 approval required for wiki write."`. `wiki/` directory listing unchanged. |
+| **Trigger** | Run `scripts/promote.py --job work/jobs/JOB-006.md --mode execute` without required Gate 3 metadata in frontmatter. |
+| **Expected Outcome** | `promote.py` checks `approved_gate_3_by` and `approved_gate_3_at` in the JOB frontmatter. If missing, exits code 1 with message `"Gate 3 approval required for wiki write."`. `wiki/` directory listing unchanged. |
 | **Pass/Fail Signal** | `PASS`: `wiki/` unchanged; exit code 1. `FAIL`: New file in `wiki/`; exit code 0. |
 | **Automatable** | **Now** — shell script with temp wiki directory. |
 | **CTM Task** | TASK-007 (audit + promote) |
