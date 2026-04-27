@@ -225,8 +225,8 @@ This test is **not in the MVP release gate.** Qdrant and RAG are deferred per `m
 | **Purpose** | Verify that automated audit failure (`AUDIT_FAILED`) and human rejection at Gate 2 (`GATE_2_REJECTED`) are recorded as separate states, separate log entries, and separate metrics. They must never be conflated. |
 | **Setup** | Create two jobs: `JOB-011` with a secret pattern in its artifact (triggers `audit.py` FAIL); `JOB-012` with a clean artifact that a human operator will reject at Gate 2. |
 | **Trigger** | Run both jobs through the full loop. For `JOB-011`, let `audit.py` run. For `JOB-012`, approve Gate 1, let it execute and audit pass, then explicitly reject at Gate 2. |
-| **Expected Outcome** | `JOB-011` status: `AUDIT_FAILED`. `audit_result: fail` in JOB file. Log entry: `event: audit_failed, reason: secret_detected`. `JOB-012` status: `GATE_2_REJECTED`. `audit_result: pass` in JOB file. `gate_2_rejected_by: human` in JOB file. Log entry: `event: gate_2_rejected, reason: human_rejection`. Metrics counter `audit_failed_total` and `gate_2_rejected_total` are separate. |
-| **Pass/Fail Signal** | `PASS`: Two distinct terminal states; two distinct log event types; JOB-11 has `audit_result=fail`, JOB-12 has `audit_result=pass` + `gate_2_rejected_by`. `FAIL`: Both jobs end in same state; log events conflated; metrics merged. |
+| **Expected Outcome** | `JOB-011` status: `AUDIT_FAILED`. `audit_result: fail` in JOB file. Log entry: `event: audit_failed, reason: secret_detected`. `JOB-012` status: `GATE_2_REJECTED`. `audit_result: pass` in JOB file. `rejected_gate: 2`, `rejected_by: human`, `rejected_at`, and `reject_reason` in JOB file. Metrics counter `audit_failed_total` and `gate_2_rejected_total` are separate. |
+| **Pass/Fail Signal** | `PASS`: Two distinct terminal states; two distinct log event types; JOB-11 has `audit_result=fail`, JOB-12 has `audit_result=pass` + `rejected_by`. `FAIL`: Both jobs end in same state; log events conflated; metrics merged. |
 | **Automatable** | **Now** — Python test with mock human rejection injection. |
 | **CTM Task** | TASK-007 (audit + promote) |
 
