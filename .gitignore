@@ -1,5 +1,7 @@
 # Environment variables (secrets)
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -13,13 +15,22 @@ logs/
 *.log
 *.jsonl
 
-# Working artifacts
-work/artifacts/
+# Runtime state / generated files (Ground Truth is only work/jobs/*.md)
+work/daemon_state.json
+work/checkpoints.db
+work/system.jsonl
+work/*.jsonl
+work/*.log
+
+# Runtime directories
+work/memory/
+work/sandbox_venv/
 work/locks/
-# Blackboard protocol (runtime state, never commit)
 work/blackboard/
+work/artifacts/
+work/staging/
+runtime/logs/
 memory/working/
-# ChromaDB / local vector store (binary, never commit)
 memory/chroma.sqlite3
 memory/*/data_level0.bin
 memory/*/header.bin
