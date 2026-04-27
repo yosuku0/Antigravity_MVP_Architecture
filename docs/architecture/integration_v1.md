@@ -1,4 +1,15 @@
 # NIM-Kinetic Meta-Agent — Integration Architecture v1.0
+
+> **Status note — historical architecture gap analysis**
+>
+> This document is retained as a historical integration/gap-analysis reference. It is not the current execution plan.
+> Current HITL / promotion invariants are defined by:
+> - `docs/architecture/requirements_canonical.md`
+> - `doc/job_lifecycle_spec.md`
+> - `doc/adr/ADR-001-mvp-control-plane.md`
+> - `docs/JOB_SPEC.md`
+>
+> Do not start the roadmap items in this document without a new approved task, PR plan, and validation plan.
 ## Synthesis of MVP 1.0.0 + P1-004 against Original 5-Layer Design
 
 ---
@@ -134,15 +145,34 @@ The original design specified multiple agent types. MVP 1.0.0 collapsed them int
 
 | Agent | Role | Crew | LLM Context | Writes To |
 |---|---|---|---|---|
-| **Brain Agent** | Requirements, planning, JOB generation | N/A (human-like) | `planning` | `work/jobs/`, `memory/decisions/` |
-| **Developer Agent** | Implementation, code generation | Coding Squad | `coding` / `nim_code` | `memory/working/`, source code |
-| **Research Agent** | External research, citations | Research Squad | `research` / `aiq` | JOB Evidence section |
-| **Review Agent** | Audit, security, quality | Review Squad | `review` | `audit_result`, review comments |
-| **Classify Agent** | Task classification, routing | N/A | `classify_local` / `classify_remote` | `routing_context` |
+| **Brain# Antigravity Phase G Requirements: Scaling & Self-Evolution
 
-### Multi-Agent Orchestration in LangGraph
+## 1. 目的
+Phase F までに完成した「堅牢な実行基盤」をベースに、運用のスケーラビリティ（量）と、ナレッジの質的な進化（質）を両立させる機能を実装します。
 
-```
+## 2. 主要機能要件
+
+### [G1] インタラクティブ HITL (Slack Integration)
+ターミナルに縛られず、モバイルや Slack 経由でジョブを監視・承認・拒否できる環境を構築します。
+
+- **技術設計アプローチ**:
+    - **Slack Bolt (Python) の導入**: `apps/daemon/slack_adapter.py` を新設し、**Gate 2** の承認・拒否通知を Slack に送信。Slack は **Gate 2** のみ対応し、**Gate 3** は CLI のみです。
+    - **インタラクティブボタン**: Slack 上の Approve/Reject ボタンから `scripts/approve.py` 相当のロジックを呼び出す。
+    - **非同期状態管理**: Slack からの入力を JOB ファイルに反映し、`wiki_daemon` が次回のスキャンで検知して処理を再開。
+    - **Slack は wiki への書き込み権限を持たず、canonical wiki コンテンツは `promote.py --mode execute`（CLI）でのみ更新されます。
+
+### [G2] 並列ジョブスケジューリング & リソース管理
+多数のジョブを効率的に処理するための並列実行エンジンを構築します。
+
+- **技術設計アプローチ**:
+    - **ジョブキュー・マネージャー**: `wiki_daemon` を拡張し、`RUNNABLE` なジョブを複数のワーカープロセス（またはスレッド）に割り当て。
+    - **Docker リソース制限**: 各ジョブを実行するコンテナに CPU/メモリの制限（例: `--cpus 1 --memory 512m`）を動的に設定し、ホストのリソース枯渇を防止。
+    - **分散ロック (Locking)**: 複数のワーカーが同一のジョブや出力先を同時に編集しないよう、`work/locks` 下に原子的なディレクトリ/ファイルベースのロック機構を実装。
+
+### [G3] 継続的ナレッジ合成 (Continuous Synthesis)
+拒否理由や実行エラーを「筋肉」として蓄積し、AI の精度を自律的に向上させます。in LangGraph
+
+```mermaid
 Entry → Load JOB
 → [Gate 1] HITL
 → Router (classify → select squad)
@@ -150,10 +180,12 @@ Entry → Load JOB
     → Research Squad (if research needed)
     → Coding Squad (implementation)
     → Review Squad (audit + security)
-→ [Gate 2] HITL
-→ Merge / Promote
-→ [Gate 3] HITL
-→ Wiki Promotion
+→ [Gate 2] HITL (Slack/CLI approval)
+→ approved_gate_2 → `promote.py --mode stage`
+→ promotion_pending
+→ [Gate 3] HITL (CLI only)
+→ approved_gate_3 → `promote.py --mode execute`
+→ promoted
 ```
 
 ---
@@ -192,8 +224,6 @@ Entry → Load JOB
 
 ---
 
-## 5. Immediate Next Task
+## 5. Historical Next Task Candidate
 
-**Start Phase A: Multi-Squad Implementation**
-
-The first concrete task is to refactor `apps/crew/` from a single `config/` directory into a `squads/` structure with three squads, and update `graph.py` to orchestrate them.
+The previous next-task candidate was Multi-Squad Implementation. It remains a future candidate only and must not be executed without a new approved task, fresh design review, and explicit validation plan.
