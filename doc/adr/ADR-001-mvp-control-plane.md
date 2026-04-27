@@ -30,8 +30,8 @@ LangGraph is the only option that provides **state machine + checkpoint + HITL i
 
 ### 2.2 What this means concretely
 
-- `graph.py` owns the job lifecycle.
-- Every state transition (CREATED → CLAIMED → EXECUTING → ...) is a LangGraph node or edge condition.
+- `graph.py` owns the pre-promotion execution lifecycle up to `audit`.
+- Post-audit HITL and promotion transitions are coordinated by `scripts/approve.py`, `apps/daemon/wiki_daemon.py`, and `scripts/promote.py`. LangGraph does not stage artifacts, promote wiki content, or contain a concrete `promote` node.
 - CrewAI runs only inside the `crew_execute_node`.
 - AI-Q patterns run only inside the `research_node` (which may be a simplified NIM call for MVP).
 - No CrewAI crew may spawn another crew. No AI-Q node may trigger a new LangGraph subgraph.
@@ -139,7 +139,7 @@ These capabilities are **prohibited** in MVP to reduce debugging surface area:
 | 1 | **Recursive job spawning** | A JOB must not create another JOB file. Prevents infinite chains. | Static: scan `crew_execute_node` output for `JOB-` pattern; dynamic: watchdog ignores jobs created by daemon user |
 | 2 | **Dynamic crew/agent creation** | All agents/crews are statically defined in config. No runtime `Agent()` instantiation. | Code review + import audit |
 | 3 | **Self-modifying router config** | `routing_config.yaml` is read-only at runtime. No code writes to it. | Filesystem read-only flag or explicit block list |
-| 4 | **Auto-promotion to wiki** | `promote.py --mode execute` may run only after HITL Gate 3 approval has been recorded in JOB frontmatter. No LangGraph node, Slack action, or autonomous agent may write canonical wiki content. | `promote.py` validates Gate 2/3 approval metadata before execute; Graph has no promote node; Slack is Gate 2 only. |
+| 4 | **Auto-promotion to wiki** | `promote.py --mode execute` may run only after HITL Gate 3 approval (`approved_gate_3_by`) has been recorded in JOB frontmatter. No LangGraph node, Slack action, or autonomous agent may write canonical wiki content. | `promote.py` validates Gate 2/3 approval metadata (`approved_gate_2_by`, `approved_gate_3_by`) before execute; Graph has no promote node; Slack is Gate 2 only. |
 | 5 | **Auto-merge to main** | Git merge is human-only. Agent may generate diff, never apply it. | `audit.py` checks for `git merge` / `git push` in artifacts |
 | 6 | **Dynamic model_policy loading** | Model selection uses static `routing_config.yaml` only. No per-request model overrides. | Router rejects `model_override` parameter |
 | 7 | **Nested LangGraph subgraphs** | No `subgraph.invoke()` inside nodes. One graph per job. | Static analysis of node imports |
