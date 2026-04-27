@@ -2,7 +2,7 @@
 graph.py — LangGraph orchestrator with domain-aware squad routing
 
 Graph structure:
-    load_job → squad_router → plan_executor → run_executor → brain_review → audit → promote → END
+    load_job → squad_router → plan_executor → run_executor → brain_review → audit → END
 
     Feedback loop (L2, max 3 iterations):
         brain_review --(failed, count<3)--> plan_executor
@@ -12,7 +12,7 @@ Domain awareness:
   - squad_router filters squads by domain permissions (.domain allowed_squads)
   - plan_executor constructs objective with optional review_feedback injection
   - run_executor executes squads via apps.crew.squad_executor
-  - Results are promoted to the correct domain wiki automatically
+  - Results are audited and synced to JOB frontmatter for promotion staging
 """
 
 from __future__ import annotations
@@ -98,13 +98,7 @@ def load_job(state: State) -> State:
 
     # HITL Context Recovery
     fm_status = fm.get("status", "created")
-    if fm_status == "approved_gate_3":
-        state["status"] = "approved_gate_3"
-        # Recover artifact path from disk
-        staging_path = Path("work/artifacts/staging") / f"{state['job_id']}.md"
-        if staging_path.exists():
-            state["artifact_path"] = staging_path
-    elif "_rejected" in fm_status:
+    if "_rejected" in fm_status:
         # Recovery from rejection
         state["status"] = "review_rejected"
         # Extract feedback from body (look for the last ## Reject Feedback header)
@@ -265,10 +259,25 @@ def _call_review_squad(artifact_path: Path) -> dict:
 
 
 def audit(state: State) -> State:
-    """Audit node — secret scan + syntax check + domain leakage check."""
+    """Audit node — secret scan + syntax check + domain leakage check.
+    
+    Final node of the graph. Syncs result to JOB frontmatter.
+    """
+    job_path = state.get("job_path")
     artifact_path = state.get("artifact_path")
+    
+    # 0. Job Path validation
+    if not job_path or not isinstance(job_path, Path) or not job_path.exists():
+        return {**state, "status": "failed", "error": f"JOB path missing or invalid: {job_path}"}
+    
+    # 1. Artifact existence check
     if not artifact_path or not artifact_path.exists():
-        return {**state, "status": "failed", "error": "Artifact missing after execution"}
+        error_msg = "Artifact missing after execution"
+        try:
+            _sync_audit_to_job(job_path, "audit_failed", "fail", error=error_msg)
+        except Exception as e:
+            return {**state, "status": "failed", "error": f"Sync failed: {e}"}
+        return {**state, "status": "audit_failed", "error": error_msg}
 
     issues = []
 
@@ -293,61 +302,64 @@ def audit(state: State) -> State:
             logger.warning(f"Domain leakage check failed: {e}", extra={"job_id": state.get("job_id")})
 
     if issues:
-        audit_result = f"FAIL: {'; '.join(issues)}"
+        audit_error = f"FAIL: {'; '.join(issues)}"
+        try:
+            _sync_audit_to_job(job_path, "audit_failed", "fail", error=audit_error)
+        except Exception as e:
+            return {**state, "status": "failed", "error": f"Sync failed: {e}"}
         return {
             **state,
-            "audit_result": audit_result,
+            "audit_result": "fail",
             "status": "audit_failed",
-            "error": audit_result,
+            "error": audit_error,
         }
 
-    new_status = "audit_passed"
-    
-    # Disk Sync: Update physical JOB file
+    # Success path
     try:
-        fm, body = read_frontmatter(state["job_path"])
-        fm["status"] = new_status
-        write_frontmatter(state["job_path"], fm, body)
+        _sync_audit_to_job(job_path, "audit_passed", "pass", artifact_path=artifact_path)
     except Exception as e:
-        logger.error(f"Disk Sync failed: {e}", exc_info=True, extra={"job_id": state.get("job_id")})
-        # If disk sync fails, the job cannot be resumed correctly.
+        # If disk sync fails, DO NOT return audit_passed
+        logger.error(f"Critical Disk Sync failed: {e}", extra={"job_id": state.get("job_id")})
         return {**state, "status": "failed", "error": f"Disk Sync failed: {e}"}
 
     logger.info(f"Audit passed for {state['job_id']}", extra={"job_id": state["job_id"]})
     return {
         **state,
-        "audit_result": "PASS",
-        "status": new_status,
+        "audit_result": "pass",
+        "status": "audit_passed",
         "error": None,
     }
 
 
-# Node aliases and additional nodes
-audit_node = audit
-
-def promote_to_wiki(state: State) -> State:
-    """Promote artifact to domain wiki via KnowledgeOS."""
-    artifact_path = state.get("artifact_path")
-    domain = state.get("target_domain")
-    job_id = state.get("job_id", "unknown")
-
-    if not artifact_path or not artifact_path.exists():
-        return {**state, "status": "failed", "error": "Artifact missing at promote"}
+def _sync_audit_to_job(job_path: Path, status: str, result: str, artifact_path: Path | None = None, error: str | None = None):
+    """Sync audit result to JOB frontmatter (Ground Truth).
+    
+    Raises:
+        RuntimeError: if the JOB file cannot be updated.
+    """
+    if not job_path or not Path(job_path).exists():
+        raise RuntimeError(f"JOB path missing or invalid: {job_path}")
 
     try:
-        from domains.knowledge_os import KnowledgeOS
-        content = artifact_path.read_text(encoding="utf-8")
-        kos = KnowledgeOS()
-        kos.save(
-            domain=domain,
-            topic=f"job_{job_id}",
-            content=content,
-            frontmatter={"job_id": job_id, "promoted_from": str(artifact_path)},
-        )
-        logger.info(f"Promoted {job_id} to {domain} wiki", extra={"job_id": job_id})
-        return {**state, "status": "promoted", "error": None}
+        fm, body = read_frontmatter(job_path)
+        fm["status"] = status
+        fm["audit_result"] = result
+        if artifact_path:
+            fm["artifact_path"] = str(artifact_path)
+        
+        if error:
+            fm["audit_error"] = error
+        else:
+            fm.pop("audit_error", None)  # Clear old errors on success
+            
+        write_frontmatter(job_path, fm, body)
     except Exception as e:
-        return {**state, "status": "failed", "error": f"Promote failed: {e}"}
+        logger.error(f"Disk Sync failed for {job_path}: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to update JOB file: {e}") from e
+
+
+# Node aliases and additional nodes
+audit_node = audit
 
 
 # ── Graph Builder ─────────────────────────────────────────────────────
@@ -362,18 +374,16 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
     builder.add_node("run_executor", run_executor)
     builder.add_node("brain_review", brain_review)
     builder.add_node("audit", audit_node)
-    builder.add_node("promote", promote_to_wiki)
 
     # Add Edges
     builder.set_entry_point("load_job")
     builder.add_conditional_edges(
         "load_job",
         lambda state: (
-            "promote" if state.get("status") == "approved_gate_3"
-            else "plan_executor" if state.get("status") == "review_rejected"
+            "plan_executor" if state.get("status") == "review_rejected"
             else "squad_router"
         ),
-        {"promote": "promote", "plan_executor": "plan_executor", "squad_router": "squad_router"}
+        {"plan_executor": "plan_executor", "squad_router": "squad_router"}
     )
 
     # Squad Router condition
@@ -403,7 +413,6 @@ def build_graph(checkpoint_db: str = "work/checkpoints.db") -> StateGraph:
     )
 
     builder.add_edge("audit", END)
-    builder.add_edge("promote", END)
 
     # Checkpointing for resilience
     if LANGGRAPH_AVAILABLE:
