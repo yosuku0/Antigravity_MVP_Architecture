@@ -30,6 +30,13 @@ except ImportError:
 from utils.atomic_io import atomic_append
 
 
+import threading
+
+# Singleton management
+_router_instance = None
+_router_lock = threading.RLock()
+
+
 class ProviderExhaustedError(Exception):
     """Raised when provider-switch budget is exceeded."""
     pass
@@ -46,12 +53,27 @@ class UnifiedRouter:
 
     MAX_SWITCHES = 2
 
+    def __new__(cls, *args, **kwargs):
+        global _router_instance
+        if _router_instance is None:
+            with _router_lock:
+                if _router_instance is None:
+                    _router_instance = super().__new__(cls)
+        return _router_instance
+
     def __init__(self, log_path: str = "work/model_calls.jsonl") -> None:
-        self.nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "")
-        self.ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.log_path = Path(log_path)
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._switch_count = 0
+        with _router_lock:
+            if getattr(self, "_initialized", False):
+                return
+
+            self.nvidia_api_key = os.environ.get("NVIDIA_API_KEY", "")
+            self.ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            self.log_path = Path(log_path)
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._switch_count = 0
+            self._state_lock = threading.RLock()
+
+            self._initialized = True
 
     def get_llm(self, context: str):
         """Get appropriate LLM for the given context.
@@ -101,13 +123,15 @@ class UnifiedRouter:
         Raises:
             ProviderExhaustedError: if budget exceeded
         """
-        if self._switch_count >= self.MAX_SWITCHES:
-            raise ProviderExhaustedError(
-                f"Provider-switch budget exceeded ({self.MAX_SWITCHES} max)"
-            )
-        self._switch_count += 1
-        self._log_call("system", "provider_switch", f"switch_{self._switch_count}")
-        return "ollama" if self._switch_count % 2 == 1 else "nvidia_nim"
+        with self._state_lock:
+            if self._switch_count >= self.MAX_SWITCHES:
+                raise ProviderExhaustedError(
+                    f"Provider-switch budget exceeded ({self.MAX_SWITCHES} max)"
+                )
+            self._switch_count += 1
+            count = self._switch_count
+            self._log_call("system", "provider_switch", f"switch_{count}")
+            return "ollama" if count % 2 == 1 else "nvidia_nim"
 
     def _log_call(self, provider: str, model: str, context: str) -> None:
         entry = {
@@ -117,3 +141,8 @@ class UnifiedRouter:
             "context": context,
         }
         atomic_append(self.log_path, json.dumps(entry, ensure_ascii=False))
+
+
+def get_router() -> UnifiedRouter:
+    """Helper to get the singleton UnifiedRouter instance."""
+    return UnifiedRouter()
