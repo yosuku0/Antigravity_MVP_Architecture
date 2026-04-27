@@ -731,7 +731,7 @@ audit_passed
   - lockのageが10分超かつPIDがdeadの場合のみstaleと判定する。
   - 生存PIDのロックは年齢に関わらず奪わない。
   - stale lockは`work/locks/archived/{job_id}_{ts}.lock`に退避してから再取得する。
-  - stale回収はexecutionを再開しない。`executing/routed`は`FAILED`、`claimed`は`approved_gate_1`に戻す。
+  - stale回収はexecutionを再開しない。`executing/routed`は`FAILED`、`claimed`は`approved_gate_1`に戻す。承認メタデータは `approved_by` を使用。
 - **Related Files**: `apps/daemon/wiki_daemon.py`
 - **Related Tests**: T001, T011
 
@@ -1399,7 +1399,7 @@ dependencies: []                  # optional
 |---|---|
 | **必須** | `job_id`、`type`、`domain`、`status`、`priority`、`objective` |
 | **オプション** | `squads`、`parallel`、`assigned_to`、`created_at`、`updated_at`、`tags`、`dependencies`、`requires_hitl` |
-| **承認メタデータ** | `approved_gate_1_by`、`approved_gate_2_by`、`approved_gate_3_by`（各gate承認時に自動付与） |
+| **承認メタデータ** | `approved_by`、`approved_at`（Gate 1）、`approved_gate_2_by`、`approved_gate_3_by`（各gate承認時に自動付与） |
 
 #### Wiki Page Frontmatter（Karpathy 由来）
 
