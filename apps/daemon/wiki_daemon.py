@@ -14,6 +14,7 @@ import os
 import time
 import threading
 import concurrent.futures
+import subprocess
 from pathlib import Path
 
 # Add project root to path BEFORE local imports
@@ -57,6 +58,10 @@ STATE_FILE = Path("work/daemon_state.json")
 LOG_FILE = Path("work/daemon.jsonl")
 STALE_MINUTES = 10
 TERMINAL_STATUSES = {"done", "failed", "audit_failed", "promoted", "cancelled"}
+
+GRAPH_RUNNABLE_STATUSES = {"approved_gate_1"}
+PROMOTION_STATUSES = {"approved_gate_2", "approved_gate_3"}
+ALL_RUNNABLE_STATUSES = GRAPH_RUNNABLE_STATUSES | PROMOTION_STATUSES
 
 
 def rebuild_state() -> dict:
@@ -156,7 +161,7 @@ def update_job_status_safe(job_id: str, status: str, result: dict = None, error:
             logger.debug(f"Status updated to {status}", extra={"job_id": job_id})
 
 
-def worker_task(job_id: str, job_path: str) -> None:
+def worker_task(job_id: str, job_path: str, original_status: str) -> None:
     """
     Worker task to execute a job in parallel.
     Ensures lock release and thread-safe status updates.
@@ -169,7 +174,7 @@ def worker_task(job_id: str, job_path: str) -> None:
         update_job_status_safe(job_id, "running")
 
         # 2. Execute job
-        result = execute_job(job_id, job_path)
+        result = execute_job(job_id, job_path, original_status)
 
         # 3. Finalize status
         final_status = result.get("status", "unknown")
@@ -281,14 +286,64 @@ def log_event(event_type: str, job_id: str, detail: str = "") -> None:
     atomic_append(LOG_FILE, json.dumps(entry, ensure_ascii=False))
 
 
-def execute_job(job_id: str, job_path: str) -> dict:
-    """Execute a job through graph.py."""
+def run_promote_command(job_path: str, mode: str) -> dict:
+    """Run promote.py in a safe subprocess."""
     try:
-        from apps.runtime.graph import run_job
-        result = run_job(job_path, job_id)
-        return result
+        cmd = [
+            sys.executable,
+            "scripts/promote.py",
+            "--job",
+            str(job_path),
+            "--mode",
+            mode,
+        ]
+        logger.info(f"Running promotion: {cmd}")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        if result.returncode == 0:
+            # Success: promote.py already updated the status in the file
+            # We just need to report success to the daemon state
+            # Note: The actual final status (promoted or promotion_pending) 
+            # will be re-read from the frontmatter by the daemon in the next pass.
+            # But for the current result object, we can estimate it.
+            target_status = "promotion_pending" if mode == "stage" else "promoted"
+            return {"status": target_status, "stdout": result.stdout}
+        else:
+            logger.error(f"Promotion failed (code {result.returncode})", extra={
+                "stdout": result.stdout,
+                "stderr": result.stderr
+            })
+            # Fail-close: We don't change the status if it failed
+            # But the daemon needs a result status to exit the worker loop
+            # We return 'failed' to indicate the task execution failed, 
+            # though the JOB frontmatter might still be in the previous state.
+            return {
+                "status": "failed", 
+                "error": f"promote.py failed with exit code {result.returncode}",
+                "stderr": result.stderr
+            }
     except Exception as e:
+        logger.error(f"Failed to launch promotion process: {e}")
         return {"status": "failed", "error": str(e)}
+
+
+def execute_job(job_id: str, job_path: str, original_status: str) -> dict:
+    """Branch execution between Graph and Promote CLI."""
+    if original_status in GRAPH_RUNNABLE_STATUSES:
+        try:
+            from apps.runtime.graph import run_job
+            result = run_job(job_path, job_id)
+            return result
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+    
+    if original_status == "approved_gate_2":
+        return run_promote_command(job_path, mode="stage")
+    
+    if original_status == "approved_gate_3":
+        return run_promote_command(job_path, mode="execute")
+
+    return {"status": "failed", "error": f"Invalid status for execution: {original_status}"}
 
 
 def process_jobs_parallel(executor: concurrent.futures.ThreadPoolExecutor) -> int:
@@ -298,8 +353,6 @@ def process_jobs_parallel(executor: concurrent.futures.ThreadPoolExecutor) -> in
     """
     state = load_state()
     count = 0
-    RUNNABLE_STATUSES = {"approved_gate_1", "approved_gate_3"}
-
     for job_id, job_info in state.get("jobs", {}).items():
         job_path = Path(job_info.get("path", ""))
         fm = read_job_frontmatter(job_path)
@@ -308,7 +361,7 @@ def process_jobs_parallel(executor: concurrent.futures.ThreadPoolExecutor) -> in
         if job_status in TERMINAL_STATUSES or job_status == "running":
             continue
         
-        if job_status not in RUNNABLE_STATUSES:
+        if job_status not in ALL_RUNNABLE_STATUSES:
             # We don't log skip anymore to keep dispatcher logs clean
             continue
 
@@ -321,8 +374,8 @@ def process_jobs_parallel(executor: concurrent.futures.ThreadPoolExecutor) -> in
                 continue
 
         # Dispatch to executor
-        logger.info(f"Dispatching job to worker pool", extra={"job_id": job_id})
-        executor.submit(worker_task, job_id, str(job_path))
+        logger.info(f"Dispatching job to worker pool ({job_status})", extra={"job_id": job_id})
+        executor.submit(worker_task, job_id, str(job_path), job_status)
         count += 1
 
     return count
