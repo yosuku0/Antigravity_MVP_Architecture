@@ -1,23 +1,14 @@
 #!/usr/bin/env python3
 """
-promote.py — Stage artifact + promote to domain wiki
+promote.py — State-aware artifact staging and wiki promotion
 
 Usage:
-    # Promote to default wiki/ (backward compatible)
-    python scripts/promote.py <artifact_path>
-
-    # Promote to specific domain wiki
-    python scripts/promote.py <artifact_path> --domain game
-
-    # Force promote (bypass Gate 3 — for recovery only)
-    python scripts/promote.py <artifact_path> --domain market --force
+    python scripts/promote.py --job JOB-001 --mode stage
+    python scripts/promote.py --job JOB-001 --mode execute
 
 Flow:
-  1. Validate artifact exists
-  2. If --domain: route to domains/{domain}/wiki/ instead of work/wiki/
-  3. Check Gate 3 (CLI approval) unless --force
-  4. Atomic copy to destination
-  5. Update daemon state
+  1. stage: Copy artifact to staging, record hash (Gate 2 -> Pending)
+  2. execute: Verify hash, signatures, and promote to KnowledgeOS (Gate 3 -> Promoted)
 """
 
 import argparse
@@ -31,9 +22,8 @@ from pathlib import Path
 # Allow importing from project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from domains.knowledge_os import KnowledgeOS, DomainError
-from utils.atomic_io import atomic_write
 from scripts.audit import audit_file
+from domains.knowledge_os import KnowledgeOS, DomainError
 
 
 # ── Configuration ─────────────────────────────────────────────────────
@@ -44,12 +34,21 @@ ALLOWED_DOMAINS = {"game", "market", "personal"}
 # ── Utilities ─────────────────────────────────────────────────────────
 
 def compute_hash(path: Path) -> str:
-    """SHA-256 of file contents for integrity verification."""
+    """Full SHA-256 hex digest of file contents for integrity verification."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
             h.update(chunk)
-    return h.hexdigest()[:16]
+    return h.hexdigest()
+
+
+def is_under_directory(path: Path, base_dir: Path) -> bool:
+    """Security check to ensure path is within base_dir."""
+    try:
+        path.resolve().relative_to(base_dir.resolve())
+        return True
+    except (ValueError, RuntimeError):
+        return False
 
 
 def log_incident(incident_type: str, resource: str, detail: str) -> None:
@@ -151,12 +150,8 @@ def execute_job(job_path: Path) -> bool:
     staged_path = Path(staged_path_str)
     
     # Path traversal check for staged_path (must be in staging dir)
-    try:
-        if not str(staged_path.resolve()).startswith(str(STAGING_DIR.resolve())):
-            print(f"[ERROR] Security: staged_artifact_path '{staged_path}' is outside staging directory")
-            return False
-    except Exception:
-        print(f"[ERROR] Security: Could not resolve staged path '{staged_path}'")
+    if not is_under_directory(staged_path, STAGING_DIR):
+        print(f"[ERROR] Security: staged_artifact_path '{staged_path}' is outside staging directory")
         return False
 
     if not staged_path.exists():
@@ -170,13 +165,13 @@ def execute_job(job_path: Path) -> bool:
         log_incident("staged_artifact_tampered", str(staged_path), f"expected={expected_hash}, actual={current_hash}")
         return False
 
-    # Topic / Domain resolution
-    domain = fm.get("domain") or "personal"
+    # Topic / Domain resolution (No default domain allowed)
+    domain = fm.get("domain")
     topic = fm.get("topic") or job_id
     
     # Validation
-    if domain not in ALLOWED_DOMAINS:
-        print(f"[ERROR] Invalid domain: {domain}. Allowed: {ALLOWED_DOMAINS}")
+    if not domain or domain not in ALLOWED_DOMAINS:
+        print(f"[ERROR] Invalid or missing domain: '{domain}'. Must be one of {ALLOWED_DOMAINS}")
         return False
 
     # Topic validation (no path traversal allowed in topic slug)
@@ -187,7 +182,6 @@ def execute_job(job_path: Path) -> bool:
     # 2. Process
     try:
         content = staged_path.read_text(encoding="utf-8")
-        from domains.knowledge_os import KnowledgeOS
         kos = KnowledgeOS()
         wiki_path = kos.save(
             domain=domain,
@@ -216,23 +210,15 @@ def execute_job(job_path: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Promote artifact to wiki (State-aware)")
-    parser.add_argument("--job", help="Job ID or path to JOB file")
+    parser.add_argument("--job", required=True, help="Job ID or path to JOB file")
     parser.add_argument(
         "--mode",
+        required=True,
         choices=["stage", "execute"],
         help="Promotion mode: 'stage' (from Gate 2) or 'execute' (from Gate 3)",
     )
     
-    # Backward compatibility args (ignored in state-aware modes)
-    parser.add_argument("legacy_artifact", nargs="?", help="[DEPRECATED] Path to artifact file")
-    parser.add_argument("--domain", help="[DEPRECATED] Target domain")
-    
     args = parser.parse_args()
-
-    if not args.job or not args.mode:
-        print("[ERROR] State-aware promotion requires --job and --mode.")
-        print("Usage: python scripts/promote.py --job JOB-001 --mode stage")
-        return 1
 
     job_path = Path(args.job)
     if not job_path.exists():
