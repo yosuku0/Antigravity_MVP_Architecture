@@ -1,6 +1,8 @@
-# Known Issues: Sandbox Tests [RESOLVED]
+# Resolved: Sandbox Stability Test Failures
 
 The previously identified failures in the sandbox execution tier tests have been resolved in the `fix/sandbox-stability-tests` branch.
+
+**Resolves #2**
 
 ## Status: RESOLVED
 
@@ -15,6 +17,7 @@ The previously identified failures in the sandbox execution tier tests have been
 
 ### 2. Tier 3 Implementation
 - Restored the missing Tier 3 "Local venv" fallback in `apps/runtime/sandbox_executor.py` using `utils.safe_subprocess`.
+- Added a safety note regarding lower isolation in local venv compared to Docker/e2b.
 - Split `test_tier_3_fallback` into two targeted tests:
     - `test_tier_3_local_venv_execution`: Verifies successful fallback to local venv when e2b and Docker fail.
     - `test_all_tiers_fail_skip`: Verifies the final "Skip" state when all execution tiers (including local venv) fail.

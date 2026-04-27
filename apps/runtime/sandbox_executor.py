@@ -23,12 +23,17 @@ def _check_docker_readiness() -> dict:
 
 
 def execute_code_safely(code: str, timeout: int = 60) -> dict:
-    """Execute Python code with 3-tier fallback.
+    """Execute Python code with fallback tiers.
     
     Tiers:
-        1. e2b Cloud
-        2. Local venv
-        3. Skip (Warn)
+        1. e2b Cloud Sandbox: Remote isolated environment (Primary).
+        2. Docker Container: Local isolated container (Secondary).
+        3. Local venv fallback: Local execution using utils.safe_subprocess (Tertiary).
+           Note: Local venv provides lower isolation than Docker/e2b and is used as 
+           a final execution attempt with strict timeout enforcement.
+
+    Final Fallback:
+        - Return skipped=True when all execution tiers are unavailable or fail.
     """
     # Tier 1: e2b
     api_key = os.environ.get("E2B_API_KEY")
