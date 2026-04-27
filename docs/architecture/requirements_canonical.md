@@ -488,13 +488,13 @@ Dockerは以下の限定範囲で採用する。Windows + PowerShellは主環境
 
 ### A-FR-030: LangGraph実行フロー
 
-- **Description**: JOBを読み込み、plan、execute、review、audit、promoteまでの実行フローをStateGraphで制御する。
+- **Description**: JOBを読み込み、plan、execute、review、auditまでの実行フローをStateGraphで制御する。
 - **Origin**: NIM-Kinetic
 - **Priority**: P0
 - **Status**: Implemented
 - **Acceptance Criteria**:
-  - Gate 1/2/3で中断し、人間承認後に次段階へ進む。
-  - audit失敗時にpromotionへ進まない。
+  - Gate 1/2で中断し、人間承認後に次段階へ進む（Gate 3は昇格時に適用）。
+  - audit失敗時に終了し、後続の昇格プロセスへ進まない。
 - **Related Files**: `apps/runtime/graph.py`
 - **Related Tests**: T007, T008, T009, T015
 
@@ -509,12 +509,37 @@ load_job → squad_router → plan_executor → run_executor → brain_review
                                                               ↓
                                                          (approved or count>=3)
                                                               ↓
-                                                          audit → promote → END
+                                                         audit → END
                                                               ↓
                                                           (failed) → END
 ```
 
 詳細状態機械は `doc/job_lifecycle_spec.md` を権威とする（CREATED / APPROVED_GATE_1 / CLAIMED / ROUTED / EXECUTING / AUDIT_PASSED / AUDIT_FAILED / GATE_2_REJECTED / APPROVED_GATE_2 / PROMOTION_PENDING / APPROVED_GATE_3 / PROMOTED / FAILED / CANCELLED）。
+
+#### 実行境界 (Execution Boundary)
+
+LangGraphの実行範囲は **audit** までであり、wikiへの昇格（promotion）は含まない。
+
+- LangGraphはaudit完了後に終了し、`END`へと遷移する。
+- LangGraphはartifactのステージング（staging）を行わない。
+- LangGraphはwikiコンテンツの昇格（promotion）を行わない。
+- wikiへの正本書き込みは `scripts/promote.py --mode execute` を介してのみ実行される。
+
+#### 昇格フロー (Promotion Flow)
+
+昇格はLangGraphの外側で、人間による承認（Gate 2/3）をトリガーとして `wiki_daemon` および `promote.py` によって制御される。
+
+```text
+audit_passed
+→ Gate 2 Slack/CLI承認
+→ approved_gate_2
+→ wiki_daemon が `scripts/promote.py --mode stage` を実行
+→ promotion_pending
+→ Gate 3 CLI承認
+→ approved_gate_3
+→ wiki_daemon が `scripts/promote.py --mode execute` を実行
+→ promoted
+```
 
 ### A-FR-040: Brain / Developer分離
 
