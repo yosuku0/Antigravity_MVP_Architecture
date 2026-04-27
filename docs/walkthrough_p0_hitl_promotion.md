@@ -16,7 +16,8 @@
 | `tests/test_audit_promote.py` | 旧 `promote_file` → `stage_job` / `execute_job` API に変更 |
 | `tests/test_safety.py` | 旧 `approve_gate_2` import → CLI呼び出し、フィールド名修正 |
 | `tests/scratch/test_reject_loop.py` | 同上 |
-| `tests/test_hitl_gated_promotion.py` | 旧設計 (Graph内promotion) → xfail/skip に置換 |
+| `tests/test_hitl_gated_promotion.py` | 旧設計 (Graph内promotion) → モジュールレベルで skip に置換 |
+| `README.md` | 旧アーキテクチャ図 (`audit -> promote`) を現状の状態機械に修正 |
 
 ### Phase 1〜5 (P0修復本体) — Step 6では変更なし
 | ファイル | 変更内容 |
@@ -135,10 +136,11 @@ pytest tests/ -q
 
 ### 全スイート: 76 passed, 1 skipped, 2 failed
 
-| 失敗テスト | 原因 | 今回の変更との関係 |
-|---|---|---|
 | `test_sandbox.py::test_tier_2_local_execution` | `_check_tier2_readiness` 属性なし | **P0修復前から既存** (commit `c67b905`) |
 | `test_sandbox.py::test_tier_3_fallback` | tier 2 vs 3 の期待値不一致 | **P0修復前から既存** |
+
+> [!NOTE]
+> 上記 `test_sandbox.py` の 2 失敗は、本 P0 修復（HITL Promotion State Machine）の変更とは独立した既存の問題であり、スコープ外として維持しています。
 
 ---
 
@@ -166,11 +168,13 @@ git grep -n "xoxb-\|xapp-\|OPENAI_API_KEY\|ANTHROPIC_API_KEY\|GITHUB_TOKEN\|ghp_
 
 ---
 
-## README / docs の旧記述修正
+## README / docs の整合性
 
-旧ステートマシン図でGraphがpromotionまで担当しているように見える記述を修正対象としましたが、  
-今回スコープ内の既存ドキュメントには Graph → promote → END という明示的な図は見当たりませんでした。  
-**READMEの修正は不要と判断しました。**
+Public repo の `README.md` において、Graph が wiki promotion まで直接担当しているように見える旧アーキテクチャ図（`audit -> promote -> END`）を、今回の P0 修復後の実態に合わせて更新しました。
+
+- Graph は `audit_passed` で停止
+- その後の Gate 2/3 承認および `promote.py` による段階的 promotion 経路を Mermaid 図に明示
+- Slack 承認の制限（Gate 2 のみ）および `promote.py` による wiki 正本書き込みの唯一性を説明文に追記
 
 ---
 
