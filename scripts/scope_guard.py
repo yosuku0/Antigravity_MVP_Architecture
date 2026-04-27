@@ -3,7 +3,8 @@
 scope_guard.py — Forbidden import detection
 
 Prevents unauthorized dependencies from entering the codebase.
-Special-case: slack_bolt allowed only in apps/ingress/
+Slack dependencies are allowed only in ingress adapters and the Gate 2 Slack HITL daemon adapter.
+Subprocess is restricted to explicitly approved infrastructure wrappers, dispatchers, scripts, and tests.
 """
 
 import argparse
@@ -19,9 +20,17 @@ FORBIDDEN = {
 
 # Module → allowed paths
 ALLOWED_PATHS = {
-    "slack_bolt": ["apps/ingress/"],
-    "slack_sdk": ["apps/ingress/"],
-    "subprocess": ["utils/safe_subprocess.py", "scripts/", "tests/"],
+    # Slack Gate 2 HITL adapter
+    "slack_bolt": ["apps/ingress/", "apps/daemon/slack_adapter.py"],
+    "slack_sdk": ["apps/ingress/", "apps/daemon/slack_adapter.py"],
+    # Subprocess allowed only in low-level utils or specific dispatchers
+    "subprocess": [
+        "utils/safe_subprocess.py",
+        "utils/docker_executor.py",  # Docker sandbox execution wrapper
+        "apps/daemon/wiki_daemon.py", # Controlled promotion subprocess dispatch
+        "scripts/",
+        "tests/",
+    ],
 }
 
 IMPORT_RE = re.compile(r"^(?:import\s+(\S+)|from\s+(\S+)\s+import)", re.MULTILINE)
