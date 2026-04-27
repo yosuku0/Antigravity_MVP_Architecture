@@ -165,28 +165,46 @@ def worker_task(job_id: str, job_path: str, original_status: str) -> None:
     """
     Worker task to execute a job in parallel.
     Ensures lock release and thread-safe status updates.
+    
+    Note on status handling:
+    - Graph jobs (approved_gate_1): marked as 'running' during execution.
+    - Promotion jobs (approved_gate_2/3): NOT marked as 'running'. JOB frontmatter
+      is the SSOT. daemon_state is updated only after subprocess exits.
     """
     try:
-        logger.info(f"Worker started execution", extra={"job_id": job_id})
+        logger.info(f"Worker started execution", extra={"job_id": job_id, "original_status": original_status})
         log_event("start", job_id)
         
-        # 1. Update status to running
-        update_job_status_safe(job_id, "running")
+        # 1. Only mark 'running' for Graph-based jobs.
+        # Promotion subprocesses are short-lived and use JOB frontmatter as SSOT.
+        if original_status in GRAPH_RUNNABLE_STATUSES:
+            update_job_status_safe(job_id, "running")
+        else:
+            logger.debug(f"Promotion job: not marking 'running', keeping original status", extra={"job_id": job_id})
 
         # 2. Execute job
         result = execute_job(job_id, job_path, original_status)
 
-        # 3. Finalize status
+        # 3. Finalize status in daemon_state.
         final_status = result.get("status", "unknown")
         update_job_status_safe(job_id, final_status, result=result)
 
-        detail = result.get("audit_result", "") or result.get("error", "")
-        log_event("complete", job_id, detail)
-        logger.info(f"Worker finished with status: {final_status}", extra={"job_id": job_id})
+        if result.get("promotion_error"):
+            log_event("promotion_error", job_id, f"returncode={result.get('returncode')} stderr={result.get('stderr', '')[:200]}")
+            logger.warning(f"Promotion failed, daemon_state preserved as '{final_status}'", extra={"job_id": job_id})
+        else:
+            detail = result.get("audit_result", "") or result.get("stdout", "") or result.get("error", "")
+            log_event("complete", job_id, detail)
+            logger.info(f"Worker finished with status: {final_status}", extra={"job_id": job_id})
 
     except Exception as e:
         logger.error(f"Worker crashed: {e}", extra={"job_id": job_id}, exc_info=True)
-        update_job_status_safe(job_id, "failed", error=str(e))
+        # Only fall through to 'failed' for unexpected Python exceptions (not promote.py failures).
+        if original_status in GRAPH_RUNNABLE_STATUSES:
+            update_job_status_safe(job_id, "failed", error=str(e))
+        else:
+            # For promotion jobs: preserve original status so the job can be retried.
+            update_job_status_safe(job_id, original_status, error=str(e))
         log_event("error", job_id, str(e))
     finally:
         # Always release the lock
@@ -286,8 +304,13 @@ def log_event(event_type: str, job_id: str, detail: str = "") -> None:
     atomic_append(LOG_FILE, json.dumps(entry, ensure_ascii=False))
 
 
-def run_promote_command(job_path: str, mode: str) -> dict:
-    """Run promote.py in a safe subprocess."""
+def run_promote_command(job_path: str, mode: str, original_status: str) -> dict:
+    """Run promote.py in a safe subprocess.
+    
+    On success: returns target status (promotion_pending or promoted).
+    On failure: returns original_status to preserve daemon_state as non-terminal.
+                JOB frontmatter is NOT modified (promote.py handles that).
+    """
     try:
         cmd = [
             sys.executable,
@@ -297,34 +320,42 @@ def run_promote_command(job_path: str, mode: str) -> dict:
             "--mode",
             mode,
         ]
-        logger.info(f"Running promotion: {cmd}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        logger.info(f"Running promotion subprocess", extra={"mode": mode, "job_path": str(job_path)})
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         
-        if result.returncode == 0:
-            # Success: promote.py already updated the status in the file
-            # We just need to report success to the daemon state
-            # Note: The actual final status (promoted or promotion_pending) 
-            # will be re-read from the frontmatter by the daemon in the next pass.
-            # But for the current result object, we can estimate it.
+        if proc.returncode == 0:
+            # Success: promote.py already updated JOB frontmatter.
             target_status = "promotion_pending" if mode == "stage" else "promoted"
-            return {"status": target_status, "stdout": result.stdout}
-        else:
-            logger.error(f"Promotion failed (code {result.returncode})", extra={
-                "stdout": result.stdout,
-                "stderr": result.stderr
-            })
-            # Fail-close: We don't change the status if it failed
-            # But the daemon needs a result status to exit the worker loop
-            # We return 'failed' to indicate the task execution failed, 
-            # though the JOB frontmatter might still be in the previous state.
+            logger.info(f"Promotion succeeded -> {target_status}", extra={"mode": mode})
             return {
-                "status": "failed", 
-                "error": f"promote.py failed with exit code {result.returncode}",
-                "stderr": result.stderr
+                "status": target_status,
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "returncode": proc.returncode,
+            }
+        else:
+            # Failure: promote.py is fail-close and did NOT modify JOB frontmatter.
+            # Return original_status so daemon_state stays non-terminal and retryable.
+            logger.error(
+                f"Promotion subprocess failed (code {proc.returncode})",
+                extra={"mode": mode, "stdout": proc.stdout, "stderr": proc.stderr}
+            )
+            return {
+                "status": original_status,
+                "promotion_error": True,
+                "returncode": proc.returncode,
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
             }
     except Exception as e:
         logger.error(f"Failed to launch promotion process: {e}")
-        return {"status": "failed", "error": str(e)}
+        return {
+            "status": original_status,
+            "promotion_error": True,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": str(e),
+        }
 
 
 def execute_job(job_id: str, job_path: str, original_status: str) -> dict:
@@ -338,10 +369,10 @@ def execute_job(job_id: str, job_path: str, original_status: str) -> dict:
             return {"status": "failed", "error": str(e)}
     
     if original_status == "approved_gate_2":
-        return run_promote_command(job_path, mode="stage")
+        return run_promote_command(job_path, mode="stage", original_status=original_status)
     
     if original_status == "approved_gate_3":
-        return run_promote_command(job_path, mode="execute")
+        return run_promote_command(job_path, mode="execute", original_status=original_status)
 
     return {"status": "failed", "error": f"Invalid status for execution: {original_status}"}
 
