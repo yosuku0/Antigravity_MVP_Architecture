@@ -139,11 +139,11 @@ These capabilities are **prohibited** in MVP to reduce debugging surface area:
 | 1 | **Recursive job spawning** | A JOB must not create another JOB file. Prevents infinite chains. | Static: scan `crew_execute_node` output for `JOB-` pattern; dynamic: watchdog ignores jobs created by daemon user |
 | 2 | **Dynamic crew/agent creation** | All agents/crews are statically defined in config. No runtime `Agent()` instantiation. | Code review + import audit |
 | 3 | **Self-modifying router config** | `routing_config.yaml` is read-only at runtime. No code writes to it. | Filesystem read-only flag or explicit block list |
-| 4 | **Auto-promotion to wiki** | `promote.py` runs only after HITL Gate 3 approval. No automated trigger. | `promote.py` requires `--approved-by` CLI flag |
+| 4 | **Auto-promotion to wiki** | `promote.py --mode execute` may run only after HITL Gate 3 approval has been recorded in JOB frontmatter. No LangGraph node, Slack action, or autonomous agent may write canonical wiki content. | `promote.py` validates Gate 2/3 approval metadata before execute; Graph has no promote node; Slack is Gate 2 only. |
 | 5 | **Auto-merge to main** | Git merge is human-only. Agent may generate diff, never apply it. | `audit.py` checks for `git merge` / `git push` in artifacts |
 | 6 | **Dynamic model_policy loading** | Model selection uses static `routing_config.yaml` only. No per-request model overrides. | Router rejects `model_override` parameter |
 | 7 | **Nested LangGraph subgraphs** | No `subgraph.invoke()` inside nodes. One graph per job. | Static analysis of node imports |
-| 8 | **Auto-send to any messaging service** | Agent may not send messages to Slack, Discord, email, or any external messaging service autonomously. Notifications (if any) are local console logs only in MVP. | Gateway layer enforcement; no messaging SDK imports permitted in runtime code |
+| 8 | **Autonomous messaging** | Agents must not send messages to Slack/Discord autonomously. | Slack integration is allowed ONLY through `apps/daemon/slack_adapter.py` for Gate 2 HITL notification, approval, and rejection. Slack is NOT allowed for Gate 3. Slack cannot write canonical wiki content. |
 
 ---
 
