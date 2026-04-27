@@ -10,7 +10,7 @@ This PR addresses critical state machine integrity issues in the Antigravity MVP
 - **Slack Gate 2 Restriction**: Updated `apps/daemon/slack_adapter.py` to limit Slack approvals exclusively to Gate 2. Slack can no longer jump directly to `approved_gate_3`.
 - **Decoupled Promotion Script**: Separated `scripts/promote.py` into `--mode stage` (artifact preparation) and `--mode execute` (final wiki write). Added strict hash verification to prevent artifact tampering between staging and execution.
 - **Daemon Dispatcher Separation**: Refactored `apps/daemon/wiki_daemon.py` to separate Graph execution from promotion tasks. Promotion failures are now treated as non-terminal to allow for retries.
-- **Regression Test Suite**: Added `tests/test_promotion_state_machine.py` providing 100% coverage of the new state machine, transition rules, and safety constraints.
+- **Regression Test Suite**: Added `tests/test_promotion_state_machine.py` providing comprehensive regression coverage for the new state machine, transition rules, and safety constraints.
 - **Documentation Alignment**: Updated `README.md` and created a detailed `docs/walkthrough_p0_hitl_promotion.md` to reflect the current architecture.
 
 ## Test Results
@@ -19,7 +19,11 @@ This PR addresses critical state machine integrity issues in the Antigravity MVP
 - **Audit & Promotion Logic**: `tests/test_audit_promote.py` — **PASSED**
 - **HITL CLI Tests**: `tests/test_hitl.py` — **PASSED**
 - **Daemon State Tests**: `tests/test_daemon.py` — **PASSED**
-- **Full Suite Overview**: `pytest tests/ -q` — **76 passed, 2 failed** (see Known Issues).
+
+**Full test suite is not fully green yet:**
+- **76 passed**
+- **2 failed** in `tests/test_sandbox.py`
+These are known pre-existing sandbox stability failures and are tracked separately.
 
 ## Known Non-blocking Failures
 
