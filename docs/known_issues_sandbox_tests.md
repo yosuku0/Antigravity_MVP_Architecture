@@ -6,6 +6,11 @@ The previously identified failures in the sandbox execution tier tests have been
 
 ## Status: RESOLVED
 
+- `.dockerignore` is present and excludes Docker build context and `work/` runtime artifacts.
+- Runtime artifacts under `work/` are **not** tracked by Git.
+- Remaining sandbox limitations (if any) are listed below.
+
+
 - `tests/test_sandbox.py::test_tier_2_local_execution` -> **RESOLVED** (Updated to `test_tier_2_docker_execution`)
 - `tests/test_sandbox.py::test_tier_3_fallback` -> **RESOLVED** (Implemented Tier 3 Local venv fallback and updated test verification)
 

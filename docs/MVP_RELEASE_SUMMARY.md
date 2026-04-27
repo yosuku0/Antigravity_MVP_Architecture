@@ -1,6 +1,8 @@
 # NIM-Kinetic Meta-Agent MVP — Release Summary
-## Version: 1.0.0
-## Date: 2026-04-25
+## Version: 1.2.0
+## Date: 2026-04-27
+
+**A‑2 Documentation Synchronization Baseline** – This release consolidates hardening work from PR #4 (Repository hygiene), PR #5 (Scope‑guard policy), PR #6 (Runtime concurrency), PR #7 (HITL / promotion invariant docs) and PR #8 (JOB runtime metadata schema).
 
 ## Verification Results
 
@@ -41,5 +43,6 @@
 
 ## GitHub Repository
 https://github.com/yosuku0/Antigravity_MVP_Architecture
-Branch: main
-Latest commit: 0b23cb8a0751eb13b4201289080239cd049ced75
+
+Baseline: A-2 documentation synchronization baseline as of PR #8.  
+For the current commit, use `git log --oneline -1`.

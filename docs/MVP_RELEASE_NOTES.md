@@ -1,5 +1,8 @@
 # Antigravity MVP — Release Notes
 
+## Version 1.2.0 — Production Hardening / A-2 Documentation Sync
+- Consolidates PR #4 (Repository hygiene / Docker build context), PR #5 (Scope‑guard policy), PR #6 (Runtime concurrency hardening), PR #7 (HITL / promotion invariant docs), PR #8 (JOB runtime metadata schema).
+
 ## Version 1.1.0 — Phase B: L1 Knowledge OS + Domains
 
 ### New Features
