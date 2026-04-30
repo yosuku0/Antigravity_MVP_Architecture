@@ -12,6 +12,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from utils.cli_operations import load_cli_operations, validate_cli_operation
+
 # Module → reason
 FORBIDDEN = {
     "requests": "Use urllib from stdlib",
@@ -74,6 +78,32 @@ def scan_file(path: Path, root: Path) -> list[dict]:
     return findings
 
 
+def scan_cli_operation_logs(root: Path) -> list[dict]:
+    """Validate CLI operation logs and protected write boundaries."""
+    findings = []
+    for rel in ("logs/cli_operations.jsonl", "work/logs/cli_operations.jsonl"):
+        log_path = root / rel
+        for entry in load_cli_operations(log_path):
+            if "_error" in entry:
+                findings.append({
+                    "file": rel,
+                    "line": entry.get("_line", 0),
+                    "module": "cli_operations",
+                    "reason": f"Invalid JSONL: {entry['_error']}",
+                    "severity": "ERROR",
+                })
+                continue
+            for error in validate_cli_operation(entry):
+                findings.append({
+                    "file": rel,
+                    "line": entry.get("_line", 0),
+                    "module": "cli_operations",
+                    "reason": error,
+                    "severity": "ERROR",
+                })
+    return findings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scope guard")
     parser.add_argument("root", nargs="?", default=".", help="Project root")
@@ -89,6 +119,8 @@ def main() -> int:
         if any(sd in rel_posix for sd in skip_dirs):
             continue
         all_findings.extend(scan_file(path, root))
+
+    all_findings.extend(scan_cli_operation_logs(root))
 
     if all_findings:
         print(f"\nScope violations found: {len(all_findings)}")

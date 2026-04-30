@@ -16,6 +16,7 @@ import threading
 import concurrent.futures
 import subprocess
 from pathlib import Path
+from typing import Any
 
 # Add project root to path BEFORE local imports
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -58,10 +59,108 @@ STATE_FILE = Path("work/daemon_state.json")
 LOG_FILE = Path("work/daemon.jsonl")
 STALE_MINUTES = 10
 TERMINAL_STATUSES = {"done", "failed", "audit_failed", "promoted", "cancelled"}
+RUNTIME_STATUSES = {"running"}
 
 GRAPH_RUNNABLE_STATUSES = {"approved_gate_1"}
 PROMOTION_STATUSES = {"approved_gate_2", "approved_gate_3"}
 ALL_RUNNABLE_STATUSES = GRAPH_RUNNABLE_STATUSES | PROMOTION_STATUSES
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
+
+
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _write_runtime_metadata(job_path: Path, updates: dict) -> None:
+    """Persist daemon-owned runtime metadata back to the JOB frontmatter."""
+    from utils.atomic_io import read_frontmatter, write_frontmatter
+
+    fm, body = read_frontmatter(job_path)
+    fm.update(updates)
+    write_frontmatter(job_path, fm, body)
+
+
+def _state_entry_from_job(path: Path, previous: dict | None = None) -> dict:
+    """Build daemon_state entry from JOB frontmatter, preserving retry metadata."""
+    previous = previous or {}
+    fm = read_job_frontmatter(path)
+    status = fm.get("status", "created")
+    retry_count = _to_int(fm.get("retry_count", previous.get("retry_count", 0)))
+    frozen = _to_bool(fm.get("frozen", previous.get("frozen", False)))
+
+    previous_status = previous.get("status")
+    crashed_while_running = previous_status in RUNTIME_STATUSES and status in ALL_RUNNABLE_STATUSES
+    if crashed_while_running:
+        retry_count += 1
+        updates = {
+            "retry_count": retry_count,
+            "last_retry_at": _utc_now(),
+        }
+        if retry_count > MAX_RETRIES:
+            frozen = True
+            updates.update({
+                "frozen": True,
+                "freeze_reason": "retry_limit_exceeded",
+                "frozen_at": _utc_now(),
+            })
+        _write_runtime_metadata(path, updates)
+        log_event("retry_recovered", path.stem, f"retry_count={retry_count} frozen={frozen}")
+
+    return {
+        "status": status,
+        "last_known_status": status,
+        "path": str(path),
+        "created": previous.get(
+            "created",
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime)),
+        ),
+        "retry_count": retry_count,
+        "frozen": frozen,
+    }
+
+
+def validate_startup_integrity(state: dict) -> list[str]:
+    """Return fail-fast startup integrity errors."""
+    errors = []
+    for job_id, info in state.get("jobs", {}).items():
+        job_path = Path(info.get("path", ""))
+        if not job_path.exists():
+            errors.append(f"{job_id}: missing JOB file {job_path}")
+            continue
+
+        fm = read_job_frontmatter(job_path)
+        if not fm:
+            errors.append(f"{job_id}: missing or invalid YAML frontmatter")
+            continue
+
+        fm_job_id = fm.get("job_id")
+        if fm_job_id and fm_job_id != job_id:
+            errors.append(f"{job_id}: frontmatter job_id mismatch ({fm_job_id})")
+
+        if not fm.get("status"):
+            errors.append(f"{job_id}: missing status")
+
+        if info.get("last_known_status") != fm.get("status", "created"):
+            errors.append(
+                f"{job_id}: last_known_status drift "
+                f"({info.get('last_known_status')} != {fm.get('status', 'created')})"
+            )
+    return errors
 
 
 def rebuild_state() -> dict:
@@ -75,19 +174,12 @@ def rebuild_state() -> dict:
 
     for path in sorted(JOBS_DIR.glob("*.md")):
         job_id = path.stem
-        fm = read_job_frontmatter(path)
-        state["jobs"][job_id] = {
-            "status": fm.get("status", "created"),
-            "path": str(path),
-            "created": time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime)
-            ),
-        }
+        state["jobs"][job_id] = _state_entry_from_job(path)
     return state
 
 
 def reconcile_state(state: dict) -> dict:
-    """Merge filesystem jobs into daemon state without resetting existing statuses."""
+    """Merge filesystem jobs into daemon state using JOB files as ground truth."""
     state.setdefault("jobs", {})
 
     # Remove jobs whose files disappeared
@@ -101,19 +193,13 @@ def reconcile_state(state: dict) -> dict:
     if JOBS_DIR.exists():
         for path in sorted(JOBS_DIR.glob("*.md")):
             job_id = path.stem
-            fm = read_job_frontmatter(path)
-            if job_id not in state["jobs"]:
-                state["jobs"][job_id] = {
-                    "status": fm.get("status", "created"),
-                    "path": str(path),
-                    "created": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime)
-                    ),
-                }
-            else:
-                # Update status from file if not terminal
-                if state["jobs"][job_id]["status"] not in TERMINAL_STATUSES:
-                    state["jobs"][job_id]["status"] = fm.get("status", state["jobs"][job_id]["status"])
+            state["jobs"][job_id] = _state_entry_from_job(path, state["jobs"].get(job_id))
+
+    errors = validate_startup_integrity(state)
+    if errors:
+        state["integrity_errors"] = errors
+        save_state(state)
+        raise RuntimeError("Daemon startup integrity check failed: " + "; ".join(errors))
 
     save_state(state)
     return state
@@ -123,12 +209,20 @@ def load_state() -> dict:
     """Load or reconcile daemon state."""
     if STATE_FILE.exists():
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                state = json.load(f)
-            return reconcile_state(state)
+            return reconcile_state(_load_state_file())
         except (json.JSONDecodeError, KeyError) as e:
             logger.error(f"Failed to parse daemon state: {e}")
     return reconcile_state({"jobs": {}})
+
+
+def _load_state_file() -> dict:
+    """Load daemon_state.json without reconciliation.
+
+    Worker threads use this to avoid treating their own in-flight `running`
+    status as a crash-recovery event.
+    """
+    with open(STATE_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 class PathEncoder(json.JSONEncoder):
@@ -150,9 +244,14 @@ STATE_LOCK = threading.Lock()
 def update_job_status_safe(job_id: str, status: str, result: dict = None, error: str = None) -> None:
     """Thread-safe update of job status in daemon state."""
     with STATE_LOCK:
-        state = load_state()
+        if STATE_FILE.exists():
+            state = _load_state_file()
+        else:
+            state = rebuild_state()
         if job_id in state["jobs"]:
             state["jobs"][job_id]["status"] = status
+            if status not in RUNTIME_STATUSES:
+                state["jobs"][job_id]["last_known_status"] = status
             if result:
                 state["jobs"][job_id]["result"] = result
             if error:
@@ -389,7 +488,11 @@ def process_jobs_parallel(executor: concurrent.futures.ThreadPoolExecutor) -> in
         fm = read_job_frontmatter(job_path)
         job_status = fm.get("status", job_info.get("status", "created"))
 
-        if job_status in TERMINAL_STATUSES or job_status == "running":
+        if _to_bool(fm.get("frozen", job_info.get("frozen", False))):
+            logger.warning("Skipping frozen job", extra={"job_id": job_id})
+            continue
+
+        if job_status in TERMINAL_STATUSES or job_status in RUNTIME_STATUSES:
             continue
         
         if job_status not in ALL_RUNNABLE_STATUSES:

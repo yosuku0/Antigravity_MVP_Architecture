@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(git pull *)",
+      "Bash(python scripts/scope_guard.py .)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(git grep *)",
+      "Bash(echo \"EXIT_slack:$?\")",
+      "Bash(echo \"EXIT_file:$?\")",
+      "Bash(echo \"EXIT_commit:$?\")"
+    ]
+  }
+}
